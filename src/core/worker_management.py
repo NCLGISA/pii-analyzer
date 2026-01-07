@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from src.database.db_utils import get_database, PIIDatabase
+from src.core.file_discovery import get_file_statistics
 
 # Configure logging with more detail
 logging.basicConfig(
@@ -533,6 +534,10 @@ def process_files_parallel(
                                         'file_path': new_file_path,
                                         'submitted_at': time.time()
                                     }
+                            else:
+                                # No pending files found - log this for debugging
+                                # This could be a transient database issue
+                                logger.debug(f"No pending files returned, active_futures: {len(active_futures)}")
                         
                         # Log progress every 10 files
                         total_processed = processed_count + error_count
@@ -593,6 +598,34 @@ def process_files_parallel(
                 files_remaining = False
                 break
             
+            # After batch completes, check if there are still pending files
+            # This handles cases where continuous dispatch couldn't find files due to transient issues
+            remaining_stats = get_file_statistics(db, job_id)
+            pending_remaining = remaining_stats.get('pending', 0)
+            processing_remaining = remaining_stats.get('processing', 0)
+            
+            if pending_remaining > 0:
+                logger.info(f"Batch finished but {pending_remaining} pending files remain. Continuing...")
+                # Reset any files stuck in processing state for too long (older than 10 minutes)
+                # This happens when workers die without completing
+                try:
+                    cursor = db.conn.cursor()
+                    cursor.execute("""
+                        UPDATE files SET status = 'pending' 
+                        WHERE job_id = ? AND status = 'processing' 
+                        AND datetime(updated_at) < datetime('now', '-10 minutes')
+                    """, (job_id,))
+                    reset_count = cursor.rowcount
+                    if reset_count > 0:
+                        db.conn.commit()
+                        logger.warning(f"Reset {reset_count} stalled 'processing' files back to 'pending'")
+                except Exception as e:
+                    logger.error(f"Error resetting stalled files: {e}")
+            elif pending_remaining == 0 and processing_remaining == 0:
+                logger.info("All files processed, exiting processing loop")
+                files_remaining = False
+                break
+            
             # Check for resource exhaustion
             mem = psutil.virtual_memory()
             if mem.percent > 90:
@@ -608,6 +641,27 @@ def process_files_parallel(
         logger.info(f"Dynamic scaling summary: Total adjustments: {scaling_stats['adjustments']}")
         logger.info(f"Worker increases: {scaling_stats['worker_increases']}, Worker decreases: {scaling_stats['worker_decreases']}")
         logger.info(f"Batch increases: {scaling_stats['batch_increases']}, Batch decreases: {scaling_stats['batch_decreases']}")
+    
+    # CRITICAL: Verify there are actually no pending files before marking complete
+    # This prevents premature completion due to transient database issues
+    final_stats = get_file_statistics(db, job_id)
+    actual_pending = final_stats.get('pending', 0)
+    actual_processing = final_stats.get('processing', 0)
+    
+    if actual_pending > 0 or actual_processing > 0:
+        logger.warning(f"Job marked as incomplete: {actual_pending} pending, {actual_processing} processing files remain")
+        db.update_job_status(job_id, 'interrupted')
+        logger.info(f"Job interrupted: processed {processed_count} files ({error_count} errors) in {elapsed:.2f}s ({rate:.2f} files/sec)")
+        return {
+            'processed': processed_count,
+            'errors': error_count,
+            'elapsed': elapsed,
+            'rate': rate,
+            'status': 'interrupted',
+            'scaling_stats': scaling_stats if enable_dynamic_scaling else {},
+            'pending_remaining': actual_pending,
+            'processing_remaining': actual_processing
+        }
     
     if not files_remaining:
         db.update_job_status(job_id, 'completed')
