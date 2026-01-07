@@ -141,12 +141,14 @@ services:
       # Data path for analysis
       - PII_DATA_PATH=/data
       # Processing settings (used when analysis is started via web UI)
-      # Optimized for 32-core, 128GB RAM with fast NFS (10Gbit + NVMe cache)
-      - PII_WORKERS=28
+      # Optimized for heavy OCR workloads (scanned PDFs) on 32-core system
+      # Reduced workers to prevent CPU overload during intensive OCR
+      - PII_WORKERS=16
       - PII_BATCH_SIZE=50
-      # OCR settings - 2 threads per worker, max 50 pages per PDF to avoid very slow scans
-      - OCR_THREADS=2
-      - MAX_PAGES=50
+      # OCR settings - 1 thread per worker (total 16 OCR threads), max 30 pages
+      # This balances throughput vs. system stability for scanned documents
+      - OCR_THREADS=1
+      - MAX_PAGES=30
       - PII_THRESHOLD=0.7
       - PII_FILE_SIZE_LIMIT=100
       # OCR settings

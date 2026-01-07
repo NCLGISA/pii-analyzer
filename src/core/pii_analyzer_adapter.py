@@ -164,12 +164,12 @@ def analyze_file(
         execution_start = time.time()
         
         # Run the CLI tool with full output capture and timeout
-        # 3 minute timeout balances detecting stuck files vs. allowing complex PDFs
+        # 2 minute timeout - balance between allowing OCR and detecting stuck files
         process = subprocess.run(
             cmd, 
             capture_output=True, 
             text=True, 
-            timeout=180  # 3 minute timeout per file
+            timeout=120  # 2 minute timeout per file
         )
         
         # Record execution time
@@ -293,7 +293,7 @@ def analyze_file(
             }
     
     except subprocess.TimeoutExpired:
-        error_msg = "Processing timeout (exceeded 3 minutes)"
+        error_msg = "Processing timeout (exceeded 2 minutes)"
         logger.error(f"Worker {worker_id}: {error_msg} for {file_path}")
         
         # Calculate memory usage
