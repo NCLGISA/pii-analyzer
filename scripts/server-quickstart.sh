@@ -1,8 +1,8 @@
 #!/bin/bash
-# Quick Start Script for PII Analyzer on Production Server
-# Run this script after extracting the deployment package
+# Quick Start Script for PII Analyzer
+# Run this script after cloning the repository
 #
-# Usage: ./scripts/server-quickstart.sh [--password YOUR_PASSWORD]
+# Usage: ./scripts/server-quickstart.sh
 
 set -e
 
@@ -13,6 +13,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}================================================${NC}"
@@ -22,99 +23,106 @@ echo ""
 
 cd "$PROJECT_DIR"
 
-# Parse arguments
-DASHBOARD_PASSWORD=""
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --password)
-            DASHBOARD_PASSWORD="$2"
-            shift 2
-            ;;
-        *)
-            echo -e "${RED}Unknown option: $1${NC}"
-            exit 1
-            ;;
-    esac
-done
+# Check prerequisites
+echo -e "${BLUE}Checking prerequisites...${NC}"
 
 # Check Docker
-echo -e "${YELLOW}Checking Docker installation...${NC}"
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}Docker is not installed. Please install Docker first.${NC}"
+    echo -e "${RED}Error: Docker is not installed${NC}"
+    echo "Please install Docker first: https://docs.docker.com/engine/install/"
     exit 1
 fi
+echo -e "${GREEN}✓${NC} Docker found: $(docker --version)"
 
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo -e "${RED}Docker Compose is not installed. Please install Docker Compose first.${NC}"
+# Check Docker Compose
+if ! docker compose version &> /dev/null; then
+    echo -e "${RED}Error: Docker Compose is not installed${NC}"
+    echo "Please install Docker Compose: https://docs.docker.com/compose/install/"
     exit 1
 fi
+echo -e "${GREEN}✓${NC} Docker Compose found: $(docker compose version --short)"
 
-echo -e "${GREEN}✓ Docker is installed${NC}"
-
-# Check data directory
-echo -e "${YELLOW}Checking /data directory...${NC}"
-if [ ! -d "/data" ]; then
-    echo -e "${RED}/data directory does not exist. Please mount your data directory.${NC}"
+# Check if user can run Docker
+if ! docker ps &> /dev/null; then
+    echo -e "${YELLOW}Warning: Cannot run Docker commands${NC}"
+    echo "You may need to:"
+    echo "  1. Add your user to the docker group: sudo usermod -aG docker \$USER"
+    echo "  2. Log out and log back in"
+    echo "  3. Or run this script with sudo"
     exit 1
 fi
-echo -e "${GREEN}✓ /data directory exists${NC}"
+echo -e "${GREEN}✓${NC} Docker permissions OK"
+
+echo ""
 
 # Create required directories
-echo -e "${YELLOW}Creating required directories...${NC}"
+echo -e "${BLUE}Creating directories...${NC}"
 mkdir -p db logs
-echo -e "${GREEN}✓ Directories created${NC}"
+chmod 777 db logs
+echo -e "${GREEN}✓${NC} Created db/ and logs/ directories"
 
-# Set up environment file
-echo -e "${YELLOW}Setting up environment file...${NC}"
-if [ ! -f ".env" ]; then
-    cp env.prod.example .env
-    echo -e "${GREEN}✓ Created .env from template${NC}"
+# Check /data directory
+echo ""
+echo -e "${BLUE}Checking data directory...${NC}"
+if [ -d "/data" ]; then
+    FILE_COUNT=$(find /data -type f 2>/dev/null | head -100 | wc -l)
+    echo -e "${GREEN}✓${NC} /data directory exists (found $FILE_COUNT+ files)"
 else
-    echo -e "${YELLOW}✓ .env already exists, skipping${NC}"
+    echo -e "${YELLOW}Warning: /data directory does not exist${NC}"
+    echo "Please ensure your data is mounted at /data before starting analysis"
+    echo "Or modify docker-compose.prod.yml to point to your data location"
 fi
 
-# Set dashboard password if provided
-if [ -n "$DASHBOARD_PASSWORD" ]; then
-    echo -e "${YELLOW}Setting dashboard password...${NC}"
-    if grep -q "^DASHBOARD_PASSWORD=" .env; then
-        sed -i "s/^DASHBOARD_PASSWORD=.*/DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD/" .env
-    else
-        echo "DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD" >> .env
-    fi
-    echo -e "${GREEN}✓ Dashboard password set${NC}"
-fi
+echo ""
 
 # Build containers
+echo -e "${BLUE}Building Docker containers (this may take several minutes)...${NC}"
+docker compose -f docker-compose.prod.yml build
+
 echo ""
-echo -e "${YELLOW}Building Docker containers (this may take several minutes)...${NC}"
-docker-compose -f docker-compose.prod.yml build
 
 # Start the stack
-echo ""
-echo -e "${YELLOW}Starting PII Analyzer stack...${NC}"
-docker-compose -f docker-compose.prod.yml up -d
+echo -e "${BLUE}Starting the PII Analyzer stack...${NC}"
+docker compose -f docker-compose.prod.yml up -d
 
-# Wait for services to start
 echo ""
-echo -e "${YELLOW}Waiting for services to start...${NC}"
+
+# Wait for services to be ready
+echo -e "${BLUE}Waiting for services to start...${NC}"
 sleep 10
 
-# Check status
+# Check container status
+echo ""
+echo -e "${BLUE}Container Status:${NC}"
+docker compose -f docker-compose.prod.yml ps
+
+echo ""
+
+# Get the server IP
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+
+# Check if dashboard is accessible
+echo -e "${BLUE}Checking dashboard...${NC}"
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ | grep -q "200\|302"; then
+    echo -e "${GREEN}✓${NC} Dashboard is running"
+else
+    echo -e "${YELLOW}Dashboard may still be starting...${NC}"
+fi
+
 echo ""
 echo -e "${GREEN}================================================${NC}"
 echo -e "${GREEN}Deployment Complete!${NC}"
 echo -e "${GREEN}================================================${NC}"
 echo ""
-
-docker-compose -f docker-compose.prod.yml ps
-
+echo -e "Dashboard URL: ${BLUE}http://${SERVER_IP}:8080${NC}"
 echo ""
-echo -e "${GREEN}Dashboard:${NC} http://$(hostname -I | awk '{print $1}'):8080"
+echo "Next steps:"
+echo "  1. Open the dashboard in your browser"
+echo "  2. Ensure your data is in /data"
+echo "  3. Click 'Start Analysis' to begin"
 echo ""
-echo -e "${YELLOW}Useful commands:${NC}"
-echo "  View logs:        docker-compose -f docker-compose.prod.yml logs -f"
-echo "  Check status:     docker-compose -f docker-compose.prod.yml ps"
-echo "  Stop stack:       docker-compose -f docker-compose.prod.yml down"
-echo "  View analysis:    docker logs -f pii-analyzer"
+echo "Useful commands:"
+echo "  View logs:     docker compose -f docker-compose.prod.yml logs -f"
+echo "  Stop stack:    docker compose -f docker-compose.prod.yml down"
+echo "  Restart:       docker compose -f docker-compose.prod.yml restart"
 echo ""
-

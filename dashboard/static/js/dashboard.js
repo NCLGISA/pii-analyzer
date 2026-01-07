@@ -10,6 +10,8 @@ let autoRefreshEnabled = true; // Auto-refresh enabled by default
 let authRequired = false; // Whether authentication is required
 let authToken = null; // Authentication token (password) for API requests
 let isDarkMode = false; // Dark mode detection
+let analysisStatusTimer = null; // Timer for polling analysis status
+let currentAnalysisState = 'idle'; // Current analysis state
 
 // DOM Elements
 const elements = {
@@ -23,6 +25,20 @@ const elements = {
     jobSelector: document.getElementById('jobSelector'),
     refreshButton: document.getElementById('refreshButton'),
     autoRefreshToggle: document.getElementById('autoRefreshToggle'),
+    
+    // Analysis Control Panel
+    controlPanel: document.getElementById('controlPanel'),
+    analysisStateBadge: document.getElementById('analysisStateBadge'),
+    analysisStateText: document.getElementById('analysisStateText'),
+    analysisSpinner: document.getElementById('analysisSpinner'),
+    analysisDataPath: document.getElementById('analysisDataPath'),
+    startAnalysisBtn: document.getElementById('startAnalysisBtn'),
+    stopAnalysisBtn: document.getElementById('stopAnalysisBtn'),
+    clearResultsBtn: document.getElementById('clearResultsBtn'),
+    analysisProgressContainer: document.getElementById('analysisProgressContainer'),
+    analysisProgressBar: document.getElementById('analysisProgressBar'),
+    analysisProgressText: document.getElementById('analysisProgressText'),
+    analysisProgressPercent: document.getElementById('analysisProgressPercent'),
     
     // Job information
     jobName: document.getElementById('jobName'),
@@ -146,6 +162,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (autoRefreshEnabled) {
         startRefreshTimer();
     }
+    
+    // Start polling analysis status
+    pollAnalysisStatus();
+    startAnalysisStatusPolling();
 });
 
 // Check if system is in dark mode
@@ -1155,4 +1175,301 @@ function lightenColor(color, percent) {
         (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 +
         (B < 255 ? B < 1 ? 0 : B : 255)
     ).toString(16).slice(1);
+}
+
+
+// ============================================================
+// Analysis Control Panel Functions
+// ============================================================
+
+// Start polling for analysis status
+function startAnalysisStatusPolling() {
+    // Poll every 2 seconds when running, every 10 seconds when idle
+    if (analysisStatusTimer) {
+        clearInterval(analysisStatusTimer);
+    }
+    
+    const interval = (currentAnalysisState === 'scanning' || currentAnalysisState === 'processing') ? 2000 : 10000;
+    analysisStatusTimer = setInterval(pollAnalysisStatus, interval);
+}
+
+// Poll analysis status
+function pollAnalysisStatus() {
+    fetch('/api/analysis/status', getRequestOptions())
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                updateAnalysisControlPanel(data);
+            }
+        })
+        .catch(error => {
+            console.error('Error polling analysis status:', error);
+        });
+}
+
+// Update the control panel based on analysis status
+function updateAnalysisControlPanel(data) {
+    const state = data.state || 'idle';
+    const previousState = currentAnalysisState;
+    currentAnalysisState = state;
+    
+    // Update state badge
+    if (elements.analysisStateBadge) {
+        const badgeClasses = {
+            'idle': 'bg-secondary',
+            'scanning': 'bg-info',
+            'processing': 'bg-primary',
+            'stopping': 'bg-warning',
+            'completed': 'bg-success',
+            'error': 'bg-danger'
+        };
+        
+        elements.analysisStateBadge.className = 'badge ' + (badgeClasses[state] || 'bg-secondary');
+        elements.analysisStateBadge.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+    }
+    
+    // Update state text
+    if (elements.analysisStateText) {
+        const stateTexts = {
+            'idle': 'Ready to analyze',
+            'scanning': 'Scanning files...',
+            'processing': 'Processing files...',
+            'stopping': 'Stopping...',
+            'completed': 'Analysis complete',
+            'error': 'Error occurred'
+        };
+        elements.analysisStateText.textContent = stateTexts[state] || state;
+    }
+    
+    // Update data path
+    if (elements.analysisDataPath && data.data_path) {
+        elements.analysisDataPath.textContent = 'Data: ' + data.data_path;
+    }
+    
+    // Show/hide spinner
+    if (elements.analysisSpinner) {
+        if (state === 'scanning' || state === 'processing' || state === 'stopping') {
+            elements.analysisSpinner.classList.remove('d-none');
+        } else {
+            elements.analysisSpinner.classList.add('d-none');
+        }
+    }
+    
+    // Show/hide buttons based on state
+    if (elements.startAnalysisBtn) {
+        if (state === 'idle' || state === 'completed' || state === 'error') {
+            elements.startAnalysisBtn.classList.remove('d-none');
+            elements.startAnalysisBtn.disabled = false;
+        } else {
+            elements.startAnalysisBtn.classList.add('d-none');
+        }
+    }
+    
+    if (elements.stopAnalysisBtn) {
+        if (state === 'scanning' || state === 'processing') {
+            elements.stopAnalysisBtn.classList.remove('d-none');
+            elements.stopAnalysisBtn.disabled = false;
+        } else if (state === 'stopping') {
+            elements.stopAnalysisBtn.classList.remove('d-none');
+            elements.stopAnalysisBtn.disabled = true;
+        } else {
+            elements.stopAnalysisBtn.classList.add('d-none');
+        }
+    }
+    
+    if (elements.clearResultsBtn) {
+        elements.clearResultsBtn.disabled = (state === 'scanning' || state === 'processing' || state === 'stopping');
+    }
+    
+    // Update progress bar
+    if (elements.analysisProgressContainer && data.files) {
+        if (state === 'scanning' || state === 'processing') {
+            elements.analysisProgressContainer.classList.remove('d-none');
+            
+            const progress = data.files.progress_percent || 0;
+            elements.analysisProgressBar.style.width = progress + '%';
+            elements.analysisProgressPercent.textContent = progress.toFixed(1) + '%';
+            
+            if (state === 'scanning') {
+                elements.analysisProgressText.textContent = `Scanning... Found ${(data.progress?.files_scanned || 0).toLocaleString()} files`;
+            } else {
+                elements.analysisProgressText.textContent = `Processing: ${data.files.completed.toLocaleString()} / ${data.files.total.toLocaleString()} files`;
+            }
+        } else {
+            elements.analysisProgressContainer.classList.add('d-none');
+        }
+    }
+    
+    // Adjust polling interval based on state
+    if (previousState !== state) {
+        startAnalysisStatusPolling();
+        
+        // Refresh dashboard when analysis completes
+        if ((previousState === 'processing' || previousState === 'scanning') && 
+            (state === 'completed' || state === 'idle')) {
+            setTimeout(() => {
+                loadJobs();
+                loadDashboardData(true);
+            }, 1000);
+        }
+    }
+}
+
+// Start analysis
+function startAnalysis() {
+    if (elements.startAnalysisBtn) {
+        elements.startAnalysisBtn.disabled = true;
+        elements.startAnalysisBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Starting...';
+    }
+    
+    fetch('/api/analysis/start', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(authRequired && authToken ? {'Authorization': `Bearer ${authToken}`} : {})
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Analysis started:', data.message);
+            pollAnalysisStatus();
+        } else {
+            alert('Error: ' + (data.error || 'Failed to start analysis'));
+            if (elements.startAnalysisBtn) {
+                elements.startAnalysisBtn.disabled = false;
+                elements.startAnalysisBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i> Start Analysis';
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error starting analysis:', error);
+        alert('Error starting analysis: ' + error.message);
+        if (elements.startAnalysisBtn) {
+            elements.startAnalysisBtn.disabled = false;
+            elements.startAnalysisBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i> Start Analysis';
+        }
+    });
+}
+
+// Stop analysis
+function stopAnalysis() {
+    if (elements.stopAnalysisBtn) {
+        elements.stopAnalysisBtn.disabled = true;
+        elements.stopAnalysisBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Stopping...';
+    }
+    
+    fetch('/api/analysis/stop', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(authRequired && authToken ? {'Authorization': `Bearer ${authToken}`} : {})
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Stop requested:', data.message);
+            pollAnalysisStatus();
+        } else {
+            alert('Error: ' + (data.error || 'Failed to stop analysis'));
+        }
+    })
+    .catch(error => {
+        console.error('Error stopping analysis:', error);
+        alert('Error stopping analysis: ' + error.message);
+    });
+}
+
+// Show clear results confirmation modal
+function confirmClearResults() {
+    const modal = new bootstrap.Modal(document.getElementById('clearConfirmModal'));
+    modal.show();
+}
+
+// Clear results
+function clearResults() {
+    // Close the modal
+    const modalEl = document.getElementById('clearConfirmModal');
+    const modal = bootstrap.Modal.getInstance(modalEl);
+    if (modal) {
+        modal.hide();
+    }
+    
+    if (elements.clearResultsBtn) {
+        elements.clearResultsBtn.disabled = true;
+        elements.clearResultsBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Clearing...';
+    }
+    
+    fetch('/api/analysis/clear', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(authRequired && authToken ? {'Authorization': `Bearer ${authToken}`} : {})
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            console.log('Results cleared:', data.message);
+            
+            // Reset the UI
+            if (elements.clearResultsBtn) {
+                elements.clearResultsBtn.disabled = false;
+                elements.clearResultsBtn.innerHTML = '<i class="bi bi-trash me-1"></i> Clear Results';
+            }
+            
+            // Refresh the dashboard
+            pollAnalysisStatus();
+            loadJobs();
+            
+            // Show a simple notification
+            alert('Results cleared successfully. Ready for new analysis.');
+            
+            // Show loading indicator as there's no data
+            elements.loadingIndicator.classList.remove('d-none');
+            elements.dashboardContent.classList.add('d-none');
+            elements.loadingIndicator.innerHTML = `
+                <div class="text-center my-5">
+                    <i class="bi bi-folder-x" style="font-size: 3rem; color: #6c757d;"></i>
+                    <h4 class="mt-3">No Analysis Data</h4>
+                    <p class="text-muted">Click "Start Analysis" to analyze files in /data</p>
+                </div>
+            `;
+        } else {
+            alert('Error: ' + (data.error || 'Failed to clear results'));
+            if (elements.clearResultsBtn) {
+                elements.clearResultsBtn.disabled = false;
+                elements.clearResultsBtn.innerHTML = '<i class="bi bi-trash me-1"></i> Clear Results';
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error clearing results:', error);
+        alert('Error clearing results: ' + error.message);
+        if (elements.clearResultsBtn) {
+            elements.clearResultsBtn.disabled = false;
+            elements.clearResultsBtn.innerHTML = '<i class="bi bi-trash me-1"></i> Clear Results';
+        }
+    });
+}
+
+// Download report (PDF or JSON)
+function downloadReport(format) {
+    let url;
+    if (format === 'pdf') {
+        url = '/api/report/pdf';
+    } else if (format === 'json') {
+        url = '/api/results/download';
+    } else {
+        console.error('Unknown format:', format);
+        return;
+    }
+    
+    if (dbPath) {
+        url += `?db_path=${encodeURIComponent(dbPath)}`;
+    }
+    
+    // Open in new window to trigger download
+    window.open(url, '_blank');
 } 

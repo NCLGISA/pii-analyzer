@@ -1,6 +1,6 @@
 # PII Analyzer Docker Stack Deployment Guide
 
-This guide covers deploying the PII Analyzer Docker stack to a production server optimized for high-performance processing.
+This guide covers deploying the PII Analyzer Docker stack to a production server. The stack provides an always-on service with a web-based control panel for analyzing files for Personally Identifiable Information (PII).
 
 ## System Requirements
 
@@ -11,6 +11,7 @@ This guide covers deploying the PII Analyzer Docker stack to a production server
 | Storage | 50GB + data | 100GB + data |
 | Docker | 20.10+ | 24.0+ |
 | Docker Compose | 2.0+ | 2.20+ |
+| Git | 2.0+ | Latest |
 
 ## Architecture Overview
 
@@ -29,19 +30,14 @@ This guide covers deploying the PII Analyzer Docker stack to a production server
 │                              │                                   │
 │                              ▼                                   │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    PII Analyzer                           │   │
+│  │           Unified PII Analyzer + Dashboard                │   │
 │  │                                                           │   │
-│  │   • 28 parallel workers                                   │   │
-│  │   • 80GB RAM allocated                                    │   │
-│  │   • Presidio PII detection                                │   │
-│  │   • OCR support via Tesseract                             │   │
+│  │   • Web-based control panel (port 8080)                   │   │
+│  │   • Start/Stop analysis via web UI                        │   │
+│  │   • PDF report generation                                 │   │
+│  │   • 28 parallel workers, 80GB RAM                         │   │
+│  │   • Presidio PII detection + OCR                          │   │
 │  │                                                           │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    Dashboard (Flask)                      │   │
-│  │                    Port 8080                              │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -60,65 +56,53 @@ This guide covers deploying the PII Analyzer Docker stack to a production server
 | Service | CPU | RAM | Instances |
 |---------|-----|-----|-----------|
 | Tika | 2 cores each | 4GB each | 8 |
-| PII Analyzer | 28 cores | 80GB | 1 |
-| Dashboard | 2 cores | 2GB | 1 |
-| **Total** | **32 cores** | **~114GB** | 10 containers |
+| PII Analyzer + Dashboard | 28 cores | 80GB | 1 |
+| **Total** | **32 cores** | **~112GB** | 9 containers |
 
 ## Deployment Steps
 
-### 1. Transfer Files to Server
+### 1. Install Prerequisites
 
-From your local machine:
+Ensure Docker and Git are installed on your server:
 
 ```bash
-# Create a tarball of the project
-tar -czvf pii-analyzer.tar.gz \
-    Dockerfile.prod \
-    Dockerfile.dashboard \
-    docker-compose.prod.yml \
-    env.prod.example \
-    requirements.txt \
-    src/ \
-    dashboard/ \
-    strict_nc_breach_pii.py \
-    inspect_db.py
+# Check Docker version
+docker --version
+docker compose version
 
-# Transfer to server
-scp -P 2222 pii-analyzer.tar.gz dataadmin@10.11.12.222:/home/dataadmin/
+# Check Git version
+git --version
 ```
 
-### 2. Server Setup
+If Docker is not installed, follow the official Docker installation guide for your OS:
+https://docs.docker.com/engine/install/
 
-SSH into the server:
-
-```bash
-ssh -p 2222 dataadmin@10.11.12.222
-```
-
-Extract and prepare:
+### 2. Clone the Repository
 
 ```bash
-# Navigate to working directory
+# Navigate to your preferred directory
 cd /home/dataadmin
 
-# Extract project files
-mkdir -p pii-analyzer
-tar -xzvf pii-analyzer.tar.gz -C pii-analyzer
-cd pii-analyzer
+# Clone the repository
+git clone https://github.com/NCLGISA/pii-analyzer.git
 
+# Enter the project directory
+cd pii-analyzer
+```
+
+### 3. Prepare Directories
+
+```bash
 # Create required directories
 mkdir -p db logs
 
-# Set up environment file
-cp env.prod.example .env
-
-# Optional: Set a dashboard password
-# Edit .env and set DASHBOARD_PASSWORD=your_secure_password
+# Set permissions for Docker volumes
+chmod 777 db logs
 ```
 
-### 3. Verify Data Mount
+### 4. Verify Data Mount
 
-Ensure the data directory is accessible:
+Ensure your data directory is accessible at `/data`:
 
 ```bash
 # Check data mount
@@ -128,38 +112,83 @@ ls -la /data
 docker run --rm -v /data:/data:ro alpine ls /data
 ```
 
-### 4. Build and Start the Stack
+If your data is in a different location, update `docker-compose.prod.yml`:
 
-```bash
-# Build the containers
-docker-compose -f docker-compose.prod.yml build
-
-# Start the stack
-docker-compose -f docker-compose.prod.yml up -d
-
-# View logs
-docker-compose -f docker-compose.prod.yml logs -f
+```yaml
+volumes:
+  - /path/to/your/data:/data:ro  # Change this line
 ```
 
-### 5. Monitor Progress
+### 5. Build and Start the Stack
 
 ```bash
-# Check container status
-docker-compose -f docker-compose.prod.yml ps
+# Build the containers (this may take several minutes the first time)
+docker compose -f docker-compose.prod.yml build
 
-# View PII analyzer logs
-docker logs -f pii-analyzer
+# Start the stack in detached mode
+docker compose -f docker-compose.prod.yml up -d
 
-# View dashboard logs
-docker logs -f pii-dashboard
-
-# Check resource usage
-docker stats
+# View startup logs
+docker compose -f docker-compose.prod.yml logs -f
 ```
 
 ### 6. Access the Dashboard
 
-Open in browser: `http://10.11.12.222:8080`
+Open in your browser: `http://YOUR_SERVER_IP:8080`
+
+## Quick Start Script
+
+For convenience, you can use the included quick start script:
+
+```bash
+# Make the script executable
+chmod +x scripts/server-quickstart.sh
+
+# Run the quick start
+./scripts/server-quickstart.sh
+```
+
+## Using the Dashboard
+
+### Control Panel
+
+The dashboard includes a control panel at the top with these functions:
+
+| Button | Description |
+|--------|-------------|
+| **Start Analysis** | Begin scanning and analyzing files in /data |
+| **Stop Analysis** | Stop the current analysis (can be resumed) |
+| **Download PDF** | Generate and download a PDF report |
+| **Download JSON** | Export results as JSON |
+| **Clear Results** | Delete all analysis results and start fresh |
+
+### Workflow
+
+1. **Place data in /data** on the Docker host
+2. **Click "Start Analysis"** in the dashboard
+3. **Monitor progress** in real-time on the dashboard
+4. **Review results** when analysis completes
+5. **Download report** as PDF or JSON
+6. **Clear results** when ready to analyze new data
+
+## Updating the Stack
+
+To update to the latest version:
+
+```bash
+# Navigate to the project directory
+cd /home/dataadmin/pii-analyzer
+
+# Pull the latest changes
+git pull origin main
+
+# Rebuild containers
+docker compose -f docker-compose.prod.yml build
+
+# Restart the stack
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
+```
 
 ## Management Commands
 
@@ -167,90 +196,70 @@ Open in browser: `http://10.11.12.222:8080`
 
 ```bash
 # Start all services
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 
 # Stop all services (preserves data)
-docker-compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml down
+
+# Restart the stack
+docker compose -f docker-compose.prod.yml restart
 
 # Stop and remove volumes (DELETES DATA)
-docker-compose -f docker-compose.prod.yml down -v
+docker compose -f docker-compose.prod.yml down -v
 ```
 
-### Restart Analysis with New Data
+### View Logs
 
 ```bash
-# Stop the current analysis
-docker-compose -f docker-compose.prod.yml stop pii-analyzer
+# All logs
+docker compose -f docker-compose.prod.yml logs -f
 
-# Optional: Clear previous results
-rm -rf db/*
+# Specific service
+docker compose -f docker-compose.prod.yml logs -f pii-analyzer
 
-# Restart the analyzer
-docker-compose -f docker-compose.prod.yml up -d pii-analyzer
+# Last 100 lines
+docker compose -f docker-compose.prod.yml logs --tail 100 pii-analyzer
 ```
 
-### Resume Interrupted Analysis
-
-The analyzer supports resumable processing. If interrupted:
+### Monitor Resources
 
 ```bash
-# The analyzer will automatically resume from where it left off
-docker-compose -f docker-compose.prod.yml up -d pii-analyzer
+# Check container status
+docker compose -f docker-compose.prod.yml ps
 
-# Or explicitly resume with the --resume flag
-docker-compose -f docker-compose.prod.yml run --rm pii-analyzer \
-    python -m src.process_files /data \
-    --db-path /app/db/pii_results.db \
-    --resume \
-    --workers 28
-```
-
-### Check Job Status
-
-```bash
-docker-compose -f docker-compose.prod.yml run --rm pii-analyzer \
-    python -m src.process_files \
-    --db-path /app/db/pii_results.db \
-    --status
-```
-
-### Export Results to JSON
-
-```bash
-docker-compose -f docker-compose.prod.yml run --rm pii-analyzer \
-    python -m src.process_files \
-    --db-path /app/db/pii_results.db \
-    --export /app/db/results.json
-
-# Copy to host
-docker cp pii-analyzer:/app/db/results.json ./results.json
+# Monitor resource usage
+docker stats
 ```
 
 ## Performance Tuning
 
 ### Adjusting Worker Count
 
-Edit `docker-compose.prod.yml` and modify the command:
+Edit environment variables in `docker-compose.prod.yml`:
 
 ```yaml
-command: >
-  python -m src.process_files
-  /data
-  --db-path /app/db/pii_results.db
-  --workers 24  # Reduce if experiencing memory pressure
-  --batch-size 50  # Reduce for large files
+environment:
+  - PII_WORKERS=24  # Reduce if experiencing memory pressure
+  - PII_BATCH_SIZE=50  # Reduce for large files
+```
+
+Then restart:
+
+```bash
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Scaling Tika Instances
 
-For document-heavy workloads, you can add more Tika instances by copying the tika service definitions and updating the `TIKA_SERVER_ENDPOINTS` environment variable.
+For document-heavy workloads, you can add more Tika instances by copying the tika service definitions in `docker-compose.prod.yml` and updating the `TIKA_SERVER_ENDPOINTS` environment variable.
 
 ### Memory Optimization
 
 If processing many large files:
 
-1. Reduce `--batch-size` to 25-50
-2. Reduce `--workers` to 20-24
+1. Reduce `PII_WORKERS` to 20-24
+2. Reduce `PII_BATCH_SIZE` to 50
 3. Increase Tika memory if seeing extraction failures
 
 ## Troubleshooting
@@ -263,34 +272,34 @@ If processing many large files:
 # Check which container is using memory
 docker stats
 
-# Reduce worker count
-docker-compose -f docker-compose.prod.yml down
-# Edit docker-compose.prod.yml, reduce --workers
-docker-compose -f docker-compose.prod.yml up -d
+# Reduce worker count in docker-compose.prod.yml
+# Then restart:
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 **2. Tika Connection Errors**
 
 ```bash
 # Check Tika health
-docker-compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml ps
 docker logs pii-tika-1
 
 # Restart Tika cluster
-docker-compose -f docker-compose.prod.yml restart tika1 tika2 tika3 tika4 tika5 tika6 tika7 tika8
+docker compose -f docker-compose.prod.yml restart tika1 tika2 tika3 tika4 tika5 tika6 tika7 tika8
 ```
 
 **3. Dashboard Not Loading**
 
 ```bash
 # Check dashboard logs
-docker logs pii-dashboard
+docker logs pii-analyzer
 
-# Verify database exists
-ls -la db/
+# Verify container is running
+docker compose -f docker-compose.prod.yml ps
 
-# Restart dashboard
-docker-compose -f docker-compose.prod.yml restart dashboard
+# Restart if needed
+docker compose -f docker-compose.prod.yml restart pii-analyzer
 ```
 
 **4. Slow Processing**
@@ -299,22 +308,29 @@ docker-compose -f docker-compose.prod.yml restart dashboard
 - Monitor CPU and memory with `docker stats`
 - Consider increasing Tika instances for document-heavy workloads
 
-### Viewing Logs
+**5. Permission Errors**
 
 ```bash
-# All logs
-docker-compose -f docker-compose.prod.yml logs -f
+# Ensure db and logs directories are writable
+chmod 777 db logs
 
-# Specific service
-docker-compose -f docker-compose.prod.yml logs -f pii-analyzer
+# Restart the container
+docker compose -f docker-compose.prod.yml restart pii-analyzer
+```
 
-# Last 100 lines
-docker-compose -f docker-compose.prod.yml logs --tail 100 pii-analyzer
+**6. Git Clone Issues**
+
+```bash
+# If you get SSL certificate errors
+git config --global http.sslVerify false
+
+# If you need to use a different branch
+git checkout branch-name
 ```
 
 ## Security Considerations
 
-1. **Dashboard Password**: Set `DASHBOARD_PASSWORD` in `.env` if the server is accessible from untrusted networks
+1. **Cloudflare Zero Trust**: This stack is designed to be used behind Cloudflare Zero Trust for authentication
 
 2. **Data Access**: The data volume is mounted read-only to prevent accidental modifications
 
@@ -328,15 +344,18 @@ To completely remove the deployment:
 
 ```bash
 # Stop and remove containers
-docker-compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml down
 
 # Remove images
-docker-compose -f docker-compose.prod.yml down --rmi all
+docker compose -f docker-compose.prod.yml down --rmi all
 
 # Remove volumes (DELETES ALL DATA)
-docker-compose -f docker-compose.prod.yml down -v
+docker compose -f docker-compose.prod.yml down -v
 
 # Clean up Docker system
 docker system prune -a
-```
 
+# Remove the project directory (optional)
+cd ..
+rm -rf pii-analyzer
+```

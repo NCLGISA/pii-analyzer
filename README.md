@@ -1,17 +1,18 @@
 # PII Analyzer
 
-A high-performance system for analyzing files for Personally Identifiable Information (PII) using Microsoft Presidio, with Docker-based deployment optimized for large-scale document processing.
+A high-performance system for analyzing files for Personally Identifiable Information (PII) using Microsoft Presidio, with an always-on Docker-based deployment and web-based control panel.
 
 ## Features
 
+- **Web-Based Control Panel**: Start/stop analysis, monitor progress, and download reports via web UI
 - **PII Detection**: Leverages Microsoft Presidio for detecting SSNs, credit cards, emails, phone numbers, and more
+- **PDF Reports**: Generate comprehensive PDF reports with executive summary and detailed findings
 - **Scalable Architecture**: Distributed Apache Tika cluster for document text extraction
 - **Resumable Processing**: Continue from where you left off if processing is interrupted
 - **Parallel Processing**: Multi-process architecture for high throughput
 - **OCR Support**: Tesseract OCR for scanned documents and images
-- **Web Dashboard**: Real-time monitoring of analysis progress and results
-- **Persistent Storage**: SQLite database for tracking processing state and results
-- **Docker Deployment**: Production-ready containerized stack
+- **Real-time Monitoring**: Dashboard shows live progress and statistics
+- **Always-On Service**: Permanent stack ready to analyze new datasets on demand
 
 ## Architecture
 
@@ -29,16 +30,11 @@ A high-performance system for analyzing files for Personally Identifiable Inform
 │                              │                                   │
 │                              ▼                                   │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    PII Analyzer                           │   │
+│  │           Unified PII Analyzer + Dashboard                │   │
+│  │   • Web control panel (port 8080)                         │   │
+│  │   • Start/Stop/Monitor analysis                           │   │
+│  │   • PDF & JSON report generation                          │   │
 │  │   • Parallel worker processes                             │   │
-│  │   • Presidio PII detection                                │   │
-│  │   • OCR support via Tesseract                             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                    Dashboard (Flask)                      │   │
-│  │                    Port 8080                              │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -50,24 +46,23 @@ A high-performance system for analyzing files for Personally Identifiable Inform
 
 - Docker 20.10+
 - Docker Compose 2.0+
-- Data directory accessible to Docker
+- Git
+- Data directory mounted at `/data` on the Docker host
 
 ### Deployment
 
-1. **Clone and prepare:**
+1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/yourusername/pii-analyzer.git
+git clone https://github.com/NCLGISA/pii-analyzer.git
 cd pii-analyzer
-mkdir -p db logs
-cp env.prod.example .env
 ```
 
-2. **Configure environment (optional):**
+2. **Prepare directories:**
 
 ```bash
-# Edit .env to set a dashboard password
-nano .env
+mkdir -p db logs
+chmod 777 db logs
 ```
 
 3. **Build and start:**
@@ -81,84 +76,80 @@ docker compose -f docker-compose.prod.yml up -d
 
 Open `http://localhost:8080` in your browser.
 
+### Quick Start Script
+
+Alternatively, run the quick start script:
+
+```bash
+chmod +x scripts/server-quickstart.sh
+./scripts/server-quickstart.sh
+```
+
+## Usage
+
+### Web-Based Workflow
+
+1. **Place your data** in `/data` on the Docker host
+2. **Open the dashboard** at `http://localhost:8080`
+3. **Click "Start Analysis"** to begin scanning
+4. **Monitor progress** in real-time
+5. **Download reports** when complete (PDF or JSON)
+6. **Click "Clear Results"** when ready for new dataset
+
+### Control Panel Features
+
+| Button | Description |
+|--------|-------------|
+| **Start Analysis** | Scan and analyze all files in /data |
+| **Stop Analysis** | Interrupt current analysis (resumable) |
+| **Download PDF** | Generate comprehensive PDF report |
+| **Download JSON** | Export raw results as JSON |
+| **Clear Results** | Delete all results for fresh analysis |
+
+## Updating
+
+To update to the latest version:
+
+```bash
+cd pii-analyzer
+git pull origin main
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ## Configuration
 
 ### Environment Variables
 
-Copy `env.prod.example` to `.env` and customize:
-
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DASHBOARD_PASSWORD` | (none) | Password to protect dashboard access |
 | `PII_WORKERS` | 28 | Number of parallel worker processes |
 | `PII_BATCH_SIZE` | 100 | Batch size for processing |
 | `PII_THRESHOLD` | 0.7 | Confidence threshold for PII detection (0.0-1.0) |
 | `PII_FILE_SIZE_LIMIT` | 100 | Maximum file size in MB |
-| `LOG_LEVEL` | INFO | Logging verbosity |
+| `PII_DATA_PATH` | /data | Path to data directory inside container |
 
 ### Resource Allocation (128GB RAM / 32 Cores)
-
-The default configuration is optimized for a 128GB RAM / 32-core server:
 
 | Service | CPU | RAM | Instances |
 |---------|-----|-----|-----------|
 | Tika | 2 cores each | 4GB each | 8 |
-| PII Analyzer | 28 cores | 80GB | 1 |
-| Dashboard | 2 cores | 2GB | 1 |
+| PII Analyzer + Dashboard | 28 cores | 80GB | 1 |
 
 For smaller servers, reduce worker count and Tika instances in `docker-compose.prod.yml`.
 
-## Usage
+## PDF Report Contents
 
-### Analyzing Data
+The generated PDF report includes:
 
-Mount your data directory at `/data` on the Docker host. The analyzer will automatically scan and process all files.
-
-```bash
-# Start analysis
-docker compose -f docker-compose.prod.yml up -d
-
-# View progress
-docker logs -f pii-analyzer
-```
-
-### Resume After Interruption
-
-The analyzer automatically resumes from where it left off:
-
-```bash
-docker compose -f docker-compose.prod.yml up -d pii-analyzer
-```
-
-### Export Results
-
-```bash
-docker compose -f docker-compose.prod.yml run --rm pii-analyzer \
-    python -m src.process_files \
-    --db-path /app/db/pii_results.db \
-    --export /app/db/results.json
-```
-
-### Check Status
-
-```bash
-docker compose -f docker-compose.prod.yml run --rm pii-analyzer \
-    python -m src.process_files \
-    --db-path /app/db/pii_results.db \
-    --status
-```
-
-### Clear Results and Re-analyze
-
-```bash
-docker compose -f docker-compose.prod.yml stop pii-analyzer
-rm -rf db/*
-docker compose -f docker-compose.prod.yml up -d pii-analyzer
-```
+- **Executive Summary**: Overview of findings and risk assessment
+- **Statistics**: File processing breakdown and metrics
+- **Entity Analysis**: Breakdown by PII type with counts
+- **High-Risk Files**: List of files containing sensitive PII (SSN, Credit Cards, etc.)
+- **Detailed Findings**: Sample of detected PII with masked values
 
 ## Supported File Types
-
-The analyzer processes documents using Apache Tika for text extraction:
 
 | Category | Extensions |
 |----------|------------|
@@ -171,8 +162,6 @@ The analyzer processes documents using Apache Tika for text extraction:
 
 ## PII Types Detected
 
-Using Microsoft Presidio, the analyzer detects:
-
 - Social Security Numbers (SSN)
 - Credit Card Numbers
 - Email Addresses
@@ -183,6 +172,7 @@ Using Microsoft Presidio, the analyzer detects:
 - Dates of Birth
 - Driver's License Numbers
 - Passport Numbers
+- Bank Account Numbers
 - And more...
 
 ## Project Structure
@@ -192,15 +182,16 @@ pii-analyzer/
 ├── src/
 │   ├── analyzers/          # Presidio PII detection
 │   ├── anonymizers/        # PII redaction (optional)
+│   ├── api/                # Analysis service API
 │   ├── core/               # File discovery & worker management
 │   ├── database/           # SQLite persistence
 │   ├── extractors/         # Tika text extraction & OCR
+│   ├── reports/            # PDF report generation
 │   └── utils/              # Logging & file utilities
 ├── dashboard/              # Flask web dashboard
 ├── tests/                  # Unit tests
 ├── scripts/                # Deployment helper scripts
-├── Dockerfile.prod         # PII Analyzer container
-├── Dockerfile.dashboard    # Dashboard container
+├── Dockerfile.unified      # Unified container (analyzer + dashboard)
 ├── docker-compose.prod.yml # Production stack
 └── env.prod.example        # Environment template
 ```

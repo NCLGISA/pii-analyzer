@@ -1,14 +1,21 @@
 # Production Docker Compose for PII Analyzer
+# Always-on architecture with web-based control panel
+#
 # Optimized for 128GB RAM / 32-core systems
+#
+# Architecture:
+#   - 8x Tika containers for document extraction
+#   - 1x Unified PII Analyzer + Dashboard container
 #
 # Resource Allocation:
 #   - 8x Tika containers: 32GB total (4GB each)
-#   - PII Analyzer:       80GB RAM, 28 CPUs
-#   - Dashboard:          2GB RAM, 2 CPUs
-#   - OS/Overhead:        ~14GB reserved
+#   - PII Analyzer/Dashboard: 80GB RAM, 28 CPUs
+#   - OS/Overhead: ~16GB reserved
 #
 # Usage:
-#   docker-compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml up -d
+#   
+# Access dashboard at: http://localhost:8080
 
 version: '3.8'
 
@@ -86,14 +93,15 @@ services:
       - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
 
   # ============================================================
-  # PII Analyzer - Main Processing Container
+  # Unified PII Analyzer + Dashboard
+  # Always-on service with web-based control panel
   # ============================================================
   pii-analyzer:
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.unified
     container_name: pii-analyzer
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       tika1:
         condition: service_healthy
@@ -113,10 +121,12 @@ services:
         condition: service_healthy
     networks:
       - pii-network
+    ports:
+      - "8080:8080"
     volumes:
       # Data directory (read-only for safety)
       - /data:/data:ro
-      # Database persistence
+      # Database persistence (read-write)
       - ./db:/app/db
       # Logs persistence
       - ./logs:/app/logs
@@ -126,13 +136,18 @@ services:
       - USE_TIKA_LOAD_BALANCER=true
       # Database location
       - PII_DB_PATH=/app/db/pii_results.db
-      # Processing settings
+      # Data path for analysis
+      - PII_DATA_PATH=/data
+      # Processing settings (used when analysis is started via web UI)
       - PII_WORKERS=28
       - PII_BATCH_SIZE=100
       - PII_THRESHOLD=0.7
+      - PII_FILE_SIZE_LIMIT=100
       # OCR settings
       - OCR_DPI=300
       - OCR_THREADS=2
+      # Flask settings
+      - FLASK_ENV=production
       # Performance tuning
       - PYTHONOPTIMIZE=1
     deploy:
@@ -141,59 +156,18 @@ services:
           cpus: '28'
           memory: 80G
         reservations:
-          cpus: '20'
-          memory: 40G
-    # Default command - can be overridden
-    command: >
-      python -m src.process_files
-      /data
-      --db-path /app/db/pii_results.db
-      --workers 28
-      --batch-size 100
-      --threshold 0.7
-      --ocr
-      --ocr-dpi 300
-      --verbose
-
-  # ============================================================
-  # Dashboard - Web UI for viewing results
-  # ============================================================
-  dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.dashboard
-    container_name: pii-dashboard
-    restart: unless-stopped
-    depends_on:
-      - pii-analyzer
-    networks:
-      - pii-network
-    ports:
-      - "8080:5000"
-    volumes:
-      # Database access (read-only is sufficient for dashboard)
-      - ./db:/app/db:ro
-    environment:
-      - PII_DB_PATH=/app/db/pii_results.db
-      - FLASK_ENV=production
-      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 512M
+          cpus: '16'
+          memory: 32G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 120s
+    # Run the unified dashboard which includes the analysis service
     command: >
       python /app/dashboard/app.py
-      --port 5000
+      --port 8080
       --db-path /app/db/pii_results.db
 
 networks:
@@ -208,4 +182,3 @@ volumes:
     driver: local
   pii-logs:
     driver: local
-

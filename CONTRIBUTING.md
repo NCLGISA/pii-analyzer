@@ -12,13 +12,19 @@ Thank you for considering contributing to PII Analyzer! This document provides g
    cd pii-analyzer
    ```
 
-2. **Build and start the development stack**
+2. **Prepare directories**
+   ```bash
+   mkdir -p db logs
+   chmod 777 db logs
+   ```
+
+3. **Build and start the development stack**
    ```bash
    docker compose -f docker-compose.prod.yml build
    docker compose -f docker-compose.prod.yml up -d
    ```
 
-3. **View logs**
+4. **View logs**
    ```bash
    docker compose -f docker-compose.prod.yml logs -f
    ```

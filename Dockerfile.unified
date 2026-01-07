@@ -1,4 +1,5 @@
-# Production Dockerfile for PII Analyzer
+# Unified Dockerfile for PII Analyzer
+# Combines Dashboard + Analysis Service for always-on operation
 # Optimized for high-performance processing on 128GB RAM / 32-core systems
 
 FROM python:3.11-slim AS base
@@ -8,7 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FLASK_ENV=production \
+    PII_DB_PATH=/app/db/pii_results.db \
+    PII_DATA_PATH=/data
 
 WORKDIR /app
 
@@ -30,9 +34,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create non-root user for security
 RUN groupadd -r piianalyzer && useradd -r -g piianalyzer piianalyzer
 
-# Copy and install Python dependencies
+# Copy and install Python dependencies (main + dashboard)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY dashboard/requirements.txt /app/dashboard/requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r /app/dashboard/requirements.txt
 
 # Download spaCy model (large model for better accuracy)
 RUN python -m spacy download en_core_web_lg
@@ -40,17 +47,20 @@ RUN python -m spacy download en_core_web_lg
 # Copy application code
 COPY --chown=piianalyzer:piianalyzer . .
 
-# Create directories for logs and ensure proper permissions
+# Create directories for logs and database, ensure proper permissions
 RUN mkdir -p /app/logs /app/db && \
     chown -R piianalyzer:piianalyzer /app
 
 # Switch to non-root user
 USER piianalyzer
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+# Expose dashboard port
+EXPOSE 8080
 
-# Default command (will be overridden in docker-compose)
-CMD ["python", "-m", "src.process_files", "--help"]
+# Health check via the dashboard
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
+
+# Run the unified dashboard (includes analysis service)
+CMD ["python", "/app/dashboard/app.py", "--port", "8080"]
 

@@ -2,7 +2,8 @@
 """
 PII Analysis Dashboard
 
-A Flask web application to visualize PII analysis progress and results
+A Flask web application to visualize PII analysis progress and results.
+Includes control panel for starting/stopping analysis and generating reports.
 """
 
 import os
@@ -15,7 +16,7 @@ from datetime import datetime
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
-from flask import Flask, render_template, jsonify, request, abort, send_from_directory, redirect, url_for, session
+from flask import Flask, render_template, jsonify, request, abort, send_from_directory, redirect, url_for, session, Response
 
 # Add project root to path
 import sys
@@ -29,6 +30,8 @@ from src.database.db_reporting import (
     get_file_type_statistics,
     get_entity_statistics
 )
+from src.api.analysis_service import get_analysis_service, AnalysisState
+from src.reports.pdf_generator import generate_pdf_report
 from strict_nc_breach_pii import (
     analyze_pii_database,
     generate_executive_summary,
@@ -898,6 +901,199 @@ def debug_session():
         'has_dashboard_password': dashboard_password is not None,
         'dashboard_password_length': len(dashboard_password) if dashboard_password else 0
     })
+
+
+# ============================================================
+# Analysis Control API Endpoints
+# ============================================================
+
+@app.route('/api/analysis/status')
+def api_analysis_status():
+    """Get current analysis status"""
+    try:
+        service = get_analysis_service()
+        status = service.get_status()
+        return jsonify({
+            'status': 'success',
+            **status
+        })
+    except Exception as e:
+        logger.error(f"Error getting analysis status: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/analysis/start', methods=['POST'])
+def api_analysis_start():
+    """Start a new analysis"""
+    try:
+        service = get_analysis_service()
+        result = service.start_analysis()
+        
+        if result['success']:
+            return jsonify({
+                'status': 'success',
+                'message': result['message'],
+                'state': result['state']
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'error': result['error'],
+                'state': result['state']
+            }), 400
+    except Exception as e:
+        logger.error(f"Error starting analysis: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/analysis/stop', methods=['POST'])
+def api_analysis_stop():
+    """Stop the current analysis"""
+    try:
+        service = get_analysis_service()
+        result = service.stop_analysis()
+        
+        if result['success']:
+            return jsonify({
+                'status': 'success',
+                'message': result['message'],
+                'state': result['state']
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'error': result['error'],
+                'state': result['state']
+            }), 400
+    except Exception as e:
+        logger.error(f"Error stopping analysis: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/analysis/clear', methods=['POST'])
+def api_analysis_clear():
+    """Clear all analysis results"""
+    try:
+        service = get_analysis_service()
+        result = service.clear_results()
+        
+        # Also clear the dashboard cache
+        cache['dashboard_data'] = {}
+        cache['high_risk_files'] = {}
+        cache['last_update'] = 0
+        
+        if result['success']:
+            return jsonify({
+                'status': 'success',
+                'message': result['message'],
+                'state': result['state']
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'error': result['error'],
+                'state': result['state']
+            }), 400
+    except Exception as e:
+        logger.error(f"Error clearing results: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+# ============================================================
+# Report Generation API Endpoints
+# ============================================================
+
+@app.route('/api/report/pdf')
+def api_report_pdf():
+    """Generate and download PDF report"""
+    db_path = request.args.get('db_path', os.environ.get('PII_DB_PATH', 'pii_results.db'))
+    job_id = request.args.get('job_id')
+    
+    if job_id:
+        try:
+            job_id = int(job_id)
+        except ValueError:
+            return jsonify({'error': 'Invalid job_id'}), 400
+    
+    try:
+        # Check if database exists
+        if not os.path.exists(db_path):
+            return jsonify({
+                'status': 'error',
+                'error': 'No analysis results available. Run an analysis first.'
+            }), 404
+        
+        # Generate PDF
+        pdf_content = generate_pdf_report(db_path, job_id)
+        
+        # Generate filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'pii_analysis_report_{timestamp}.pdf'
+        
+        return Response(
+            pdf_content,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': len(pdf_content)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error generating PDF report: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/results/download')
+def api_results_download():
+    """Download results as JSON"""
+    db_path = request.args.get('db_path', os.environ.get('PII_DB_PATH', 'pii_results.db'))
+    
+    try:
+        service = get_analysis_service()
+        result = service.export_results_json()
+        
+        if not result['success']:
+            return jsonify({
+                'status': 'error',
+                'error': result['error']
+            }), 404
+        
+        # Generate filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'pii_analysis_results_{timestamp}.json'
+        
+        json_content = json.dumps(result['data'], indent=2)
+        
+        return Response(
+            json_content,
+            mimetype='application/json',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': len(json_content)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error downloading results: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 
 def parse_args():
     """Parse command line arguments"""

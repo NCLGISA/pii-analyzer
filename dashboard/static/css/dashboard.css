@@ -110,6 +110,35 @@ footer {
     border-top: 1px solid #e9ecef;
 }
 
+/* Control Panel Styling */
+#controlPanel {
+    border-left: 4px solid #0d6efd;
+}
+
+#controlPanel .card-header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+#controlPanel .btn-group .dropdown-toggle::after {
+    margin-left: 0.5em;
+}
+
+#analysisProgressContainer .progress {
+    background-color: #e9ecef;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+#analysisProgressContainer .progress-bar {
+    background: linear-gradient(90deg, #0d6efd 0%, #0dcaf0 100%);
+}
+
+/* State badge styling */
+#analysisStateBadge {
+    font-size: 0.85rem;
+    padding: 0.5em 1em;
+}
+
 /* Dark mode styles - will be automatically applied when system prefers dark mode */
 @media (prefers-color-scheme: dark), html.dark-mode {
     /* Core elements */
