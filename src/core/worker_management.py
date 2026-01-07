@@ -415,7 +415,8 @@ def process_files_parallel(
                         'submitted_at': time.time()
                     }
             
-            # Wait for the batch to complete with timeout monitoring
+            # Process with continuous dispatch - as each file completes, immediately submit another
+            # This keeps all workers busy instead of waiting for the whole batch to complete
             batch_start_time = time.time()
             batch_files_processed = 0
             batch_files_succeeded = 0
@@ -424,114 +425,156 @@ def process_files_parallel(
             consecutive_errors = 0
             slow_files = []
             
-            for future in concurrent.futures.as_completed(futures, timeout=WORKER_TIMEOUT_SECONDS * 2):
-                # Check for stop request during batch processing
+            # Keep all futures in a set for continuous processing
+            active_futures = set(futures)
+            next_worker_id = len(futures)  # For tracking worker assignments
+            
+            while active_futures and not stop_requested:
+                # Check for stop request
                 if stop_event is not None and stop_event.is_set():
                     stop_requested = True
                     logger.info("Stop event detected during batch processing")
-                    # Continue processing to allow graceful completion of already-started work
-                    # but don't submit new batches
+                    break
                 
+                # Wait for at least one future to complete (with timeout)
                 try:
-                    # Get file info for this future
-                    file_info = submitted_files.get(future, {})
-                    file_path = file_info.get('file_path', 'unknown')
-                    file_id = file_info.get('file_id', 0)
-                    submitted_at = file_info.get('submitted_at', batch_start_time)
-                    
-                    result = future.result(timeout=WORKER_TIMEOUT_SECONDS)
-                    batch_files_processed += 1
-                    
-                    # Calculate processing time
-                    file_processing_time = time.time() - submitted_at
-                    
-                    # Log slow files (> 30 seconds)
-                    if file_processing_time > 30:
-                        slow_files.append({
-                            'path': os.path.basename(file_path),
-                            'time': file_processing_time
-                        })
-                        logger.warning(f"SLOW FILE: {os.path.basename(file_path)} took {file_processing_time:.1f}s")
-                    
-                    if result.get('success', False):
-                        # Update the database with results
-                        db.store_file_results(
-                            result['file_id'], 
-                            result['processing_time'], 
-                            result.get('entities', []), 
-                            result.get('metadata', {})
-                        )
-                        db.mark_file_completed(result['file_id'], job_id)
-                        stats_queue.add_processed()
-                        processed_count += 1
-                        batch_files_succeeded += 1
-                        consecutive_errors = 0  # Reset error counter on success
+                    done, active_futures = concurrent.futures.wait(
+                        active_futures, 
+                        timeout=5.0,  # Check every 5 seconds
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                except Exception as e:
+                    logger.error(f"Error waiting for futures: {e}")
+                    continue
+                
+                # Process completed futures
+                for future in done:
+                    try:
+                        # Get file info for this future
+                        file_info = submitted_files.get(future, {})
+                        file_path = file_info.get('file_path', 'unknown')
+                        file_id = file_info.get('file_id', 0)
+                        submitted_at = file_info.get('submitted_at', batch_start_time)
                         
-                        # Log individual file completion for debugging
-                        entity_count = len(result.get('entities', []))
-                        logger.debug(f"Completed: {os.path.basename(file_path)} - {entity_count} entities in {file_processing_time:.1f}s")
-                    else:
-                        # Mark as error
-                        error_msg = result.get('error_message', 'Unknown error')
-                        db.mark_file_error(result['file_id'], job_id, error_msg)
-                        stats_queue.add_error()
+                        result = future.result(timeout=10)  # Short timeout - should already be done
+                        batch_files_processed += 1
+                        
+                        # Calculate processing time
+                        file_processing_time = time.time() - submitted_at
+                        
+                        # Log slow files (> 30 seconds)
+                        if file_processing_time > 30:
+                            slow_files.append({
+                                'path': os.path.basename(file_path),
+                                'time': file_processing_time
+                            })
+                            logger.warning(f"SLOW FILE: {os.path.basename(file_path)} took {file_processing_time:.1f}s")
+                        
+                        if result.get('success', False):
+                            # Update the database with results
+                            db.store_file_results(
+                                result['file_id'], 
+                                result['processing_time'], 
+                                result.get('entities', []), 
+                                result.get('metadata', {})
+                            )
+                            db.mark_file_completed(result['file_id'], job_id)
+                            stats_queue.add_processed()
+                            processed_count += 1
+                            batch_files_succeeded += 1
+                            consecutive_errors = 0  # Reset error counter on success
+                            
+                            # Log individual file completion for debugging
+                            entity_count = len(result.get('entities', []))
+                            logger.debug(f"Completed: {os.path.basename(file_path)} - {entity_count} entities in {file_processing_time:.1f}s")
+                        else:
+                            # Mark as error
+                            error_msg = result.get('error_message', 'Unknown error')
+                            db.mark_file_error(result['file_id'], job_id, error_msg)
+                            stats_queue.add_error()
+                            error_count += 1
+                            batch_files_failed += 1
+                            consecutive_errors += 1
+                            
+                            # Log error details
+                            logger.warning(f"Failed: {os.path.basename(file_path)} - {error_msg[:100]}")
+                        
+                        # Call progress callback if provided
+                        if progress_callback:
+                            progress_callback({
+                                'type': 'file_completed' if result.get('success', False) else 'file_error',
+                                'file_id': result.get('file_id'),
+                                'file_path': result.get('file_path'),
+                                'entities': result.get('entities', []),
+                                'error': result.get('error_message') if not result.get('success', False) else None
+                            })
+                        
+                        # CONTINUOUS DISPATCH: Immediately submit a new file for this completed worker
+                        if not stop_requested and (max_files is None or processed_count + error_count < max_files):
+                            new_files = db.get_pending_files(job_id, limit=1)
+                            if new_files:
+                                new_file_id, new_file_path = new_files[0]
+                                if db.mark_file_processing(new_file_id):
+                                    worker_settings = settings.copy()
+                                    worker_settings['worker_id'] = next_worker_id
+                                    next_worker_id += 1
+                                    
+                                    new_future = executor.submit(
+                                        process_single_file_process_safe,
+                                        new_file_id,
+                                        new_file_path,
+                                        db_path,
+                                        job_id,
+                                        worker_settings
+                                    )
+                                    active_futures.add(new_future)
+                                    submitted_files[new_future] = {
+                                        'file_id': new_file_id,
+                                        'file_path': new_file_path,
+                                        'submitted_at': time.time()
+                                    }
+                        
+                        # Log progress every 10 files
+                        total_processed = processed_count + error_count
+                        if total_processed % 10 == 0 and total_processed > 0:
+                            elapsed = time.time() - start_time
+                            rate = total_processed / elapsed if elapsed > 0 else 0
+                            mem = psutil.virtual_memory()
+                            logger.info(f"Progress: {total_processed} files in {elapsed:.1f}s ({rate:.2f}/sec) | Memory: {mem.percent:.1f}% | Errors: {error_count} | Active workers: {len(active_futures)}")
+                        
+                        # Check for too many consecutive errors
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                            logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping batch")
+                            stop_requested = True
+                            break
+                            
+                    except concurrent.futures.TimeoutError:
+                        # Handle timeout - file took too long
+                        file_info = submitted_files.get(future, {})
+                        file_path = file_info.get('file_path', 'unknown')
+                        file_id = file_info.get('file_id', 0)
+                        
+                        logger.error(f"TIMEOUT: {os.path.basename(file_path)} exceeded timeout")
+                        
+                        if file_id:
+                            db.mark_file_error(file_id, job_id, f"Processing timeout ({WORKER_TIMEOUT_SECONDS}s)")
+                        
                         error_count += 1
                         batch_files_failed += 1
                         consecutive_errors += 1
                         
-                        # Log error details
-                        logger.warning(f"Failed: {os.path.basename(file_path)} - {error_msg[:100]}")
-                    
-                    # Call progress callback if provided
-                    if progress_callback:
-                        progress_callback({
-                            'type': 'file_completed' if result.get('success', False) else 'file_error',
-                            'file_id': result.get('file_id'),
-                            'file_path': result.get('file_path'),
-                            'entities': result.get('entities', []),
-                            'error': result.get('error_message') if not result.get('success', False) else None
-                        })
-                    
-                    # Log progress every 10 files or every 30 seconds
-                    total_processed = processed_count + error_count
-                    if total_processed % 10 == 0 and total_processed > 0:
-                        elapsed = time.time() - start_time
-                        rate = total_processed / elapsed if elapsed > 0 else 0
-                        mem = psutil.virtual_memory()
-                        logger.info(f"Progress: {total_processed} files in {elapsed:.1f}s ({rate:.2f}/sec) | Memory: {mem.percent:.1f}% | Errors: {error_count}")
-                    
-                    # Check for too many consecutive errors
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping batch")
-                        stop_requested = True
+                    except Exception as e:
+                        logger.error(f"Worker process error: {e}")
+                        error_count += 1
+                        batch_files_failed += 1
+                        consecutive_errors += 1
                         
-                except concurrent.futures.TimeoutError:
-                    # Handle timeout - file took too long
-                    file_info = submitted_files.get(future, {})
-                    file_path = file_info.get('file_path', 'unknown')
-                    file_id = file_info.get('file_id', 0)
-                    
-                    logger.error(f"TIMEOUT: {os.path.basename(file_path)} exceeded {WORKER_TIMEOUT_SECONDS}s")
-                    
-                    if file_id:
-                        db.mark_file_error(file_id, job_id, f"Processing timeout ({WORKER_TIMEOUT_SECONDS}s)")
-                    
-                    error_count += 1
-                    batch_files_failed += 1
-                    consecutive_errors += 1
-                    
-                except Exception as e:
-                    logger.error(f"Worker process error: {e}")
-                    error_count += 1
-                    batch_files_failed += 1
-                    consecutive_errors += 1
-                    
-                    # Call progress callback for errors if provided
-                    if progress_callback:
-                        progress_callback({
-                            'type': 'file_error',
-                            'error': str(e)
-                        })
+                        # Call progress callback for errors if provided
+                        if progress_callback:
+                            progress_callback({
+                                'type': 'file_error',
+                                'error': str(e)
+                            })
             
             # Log detailed batch statistics
             batch_elapsed = time.time() - batch_start_time
