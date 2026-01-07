@@ -188,8 +188,12 @@ class PIIReportGenerator:
         story.extend(self._build_entity_analysis())
         story.append(PageBreak())
         
-        # High Risk Files
+        # High Risk Files (with full paths)
         story.extend(self._build_high_risk_files())
+        story.append(PageBreak())
+        
+        # All Files with PII (complete listing with full paths)
+        story.extend(self._build_all_pii_files())
         story.append(PageBreak())
         
         # Detailed Findings (sample)
@@ -536,7 +540,6 @@ class PIIReportGenerator:
                   AND e.entity_type IN ('US_SSN', 'CREDIT_CARD', 'US_DRIVER_LICENSE', 'US_PASSPORT', 'US_BANK_NUMBER')
                 GROUP BY f.file_id
                 ORDER BY entity_count DESC
-                LIMIT 100
             """
             cursor.execute(query, (self.job_id,))
             high_risk_files = cursor.fetchall()
@@ -560,41 +563,158 @@ class PIIReportGenerator:
         ))
         elements.append(Spacer(1, 12))
         
-        # Create table
-        file_data = [['#', 'File Path', 'PII Types', 'Count']]
-        for i, (file_path, entity_types, count) in enumerate(high_risk_files[:50], 1):
-            # Truncate long paths
-            display_path = file_path if len(file_path) <= 60 else '...' + file_path[-57:]
-            file_data.append([
-                str(i),
-                display_path,
-                entity_types.replace(',', ', ') if entity_types else '',
-                str(count)
-            ])
+        # Summary table with counts by PII type
+        elements.append(Paragraph("High-Risk PII Summary by Type", self.styles['SubsectionTitle']))
         
-        file_table = Table(file_data, colWidths=[0.4*inch, 3.5*inch, 1.5*inch, 0.5*inch])
-        file_table.setStyle(TableStyle([
+        # Create summary
+        type_counts = {}
+        for _, entity_types, count in high_risk_files:
+            if entity_types:
+                for et in entity_types.split(','):
+                    et = et.strip()
+                    display_name = ENTITY_DISPLAY_NAMES.get(et, et)
+                    type_counts[display_name] = type_counts.get(display_name, 0) + 1
+        
+        summary_data = [['PII Type', 'Files Affected']]
+        for pii_type, file_count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+            summary_data.append([pii_type, str(file_count)])
+        
+        summary_table = Table(summary_data, colWidths=[3*inch, 1.5*inch])
+        summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#c53030')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-            ('ALIGN', (3, 0), (3, -1), 'RIGHT'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#fff5f5'), colors.white]),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#feb2b2')),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('WORDWRAP', (1, 0), (1, -1), True),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ]))
-        elements.append(file_table)
+        elements.append(summary_table)
+        elements.append(Spacer(1, 16))
         
-        if len(high_risk_files) > 50:
-            elements.append(Spacer(1, 8))
+        # Full file listing with complete paths
+        elements.append(Paragraph("Complete High-Risk File Listing", self.styles['SubsectionTitle']))
+        elements.append(Spacer(1, 8))
+        
+        # List all high-risk files with full paths
+        for i, (file_path, entity_types, count) in enumerate(high_risk_files, 1):
+            # Format entity types for display
+            if entity_types:
+                formatted_types = ', '.join([
+                    ENTITY_DISPLAY_NAMES.get(et.strip(), et.strip()) 
+                    for et in entity_types.split(',')
+                ])
+            else:
+                formatted_types = 'Unknown'
+            
+            # Create a paragraph for each file with full path
+            file_entry = f"<b>{i}.</b> {file_path}<br/>" \
+                        f"<font size='8' color='#666666'>    PII Types: {formatted_types} | Count: {count}</font>"
+            elements.append(Paragraph(file_entry, self.styles['HighRiskItem']))
+            elements.append(Spacer(1, 4))
+            
+            # Add page break every 40 files to avoid memory issues with very long lists
+            if i > 0 and i % 40 == 0 and i < len(high_risk_files):
+                elements.append(PageBreak())
+                elements.append(Paragraph(
+                    f"High-Risk Files (continued - {i+1} to {min(i+40, len(high_risk_files))})", 
+                    self.styles['SubsectionTitle']
+                ))
+                elements.append(Spacer(1, 8))
+        
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph(
+            f"<b>Total High-Risk Files: {len(high_risk_files)}</b>",
+            self.styles['Normal']
+        ))
+        
+        return elements
+    
+    def _build_all_pii_files(self) -> List:
+        """Build a section listing ALL files with any PII detected"""
+        elements = []
+        
+        elements.append(Paragraph("All Files with PII Detected", self.styles['SectionTitle']))
+        elements.append(HRFlowable(width="100%", color=colors.HexColor('#e2e8f0')))
+        elements.append(Spacer(1, 12))
+        
+        # Query all files with any PII
+        try:
+            cursor = self.db.conn.cursor()
+            
+            query = """
+                SELECT DISTINCT f.file_path, GROUP_CONCAT(DISTINCT e.entity_type) as entity_types,
+                       COUNT(e.entity_id) as entity_count
+                FROM files f
+                JOIN entities e ON f.file_id = e.file_id
+                WHERE f.job_id = ?
+                GROUP BY f.file_id
+                ORDER BY entity_count DESC
+            """
+            cursor.execute(query, (self.job_id,))
+            all_pii_files = cursor.fetchall()
+            
+        except Exception as e:
+            logger.error(f"Error querying all PII files: {e}")
+            all_pii_files = []
+        
+        if not all_pii_files:
             elements.append(Paragraph(
-                f"<i>Showing first 50 of {len(high_risk_files)} high-risk files. "
-                "Export full results for complete listing.</i>",
-                self.styles['Footer']
+                "No files with PII were detected in this analysis.",
+                self.styles['Normal']
             ))
+            return elements
+        
+        elements.append(Paragraph(
+            f"<b>{len(all_pii_files)}</b> files were found containing PII of any type.",
+            self.styles['Normal']
+        ))
+        elements.append(Spacer(1, 12))
+        
+        # List all files with full paths
+        for i, (file_path, entity_types, count) in enumerate(all_pii_files, 1):
+            # Format entity types for display
+            if entity_types:
+                formatted_types = ', '.join([
+                    ENTITY_DISPLAY_NAMES.get(et.strip(), et.strip()) 
+                    for et in entity_types.split(',')
+                ])
+            else:
+                formatted_types = 'Unknown'
+            
+            # Determine risk level for color coding
+            high_risk_types = ['US_SSN', 'CREDIT_CARD', 'US_DRIVER_LICENSE', 'US_PASSPORT', 'US_BANK_NUMBER']
+            is_high_risk = any(et.strip() in high_risk_types for et in (entity_types or '').split(','))
+            
+            if is_high_risk:
+                color = '#c53030'  # Red for high-risk
+                risk_label = '[HIGH RISK] '
+            else:
+                color = '#2b6cb0'  # Blue for standard PII
+                risk_label = ''
+            
+            # Create a paragraph for each file with full path
+            file_entry = f"<b>{i}.</b> <font color='{color}'>{risk_label}</font>{file_path}<br/>" \
+                        f"<font size='8' color='#666666'>    PII Types: {formatted_types} | Count: {count}</font>"
+            elements.append(Paragraph(file_entry, self.styles['BodyTextIndent']))
+            elements.append(Spacer(1, 4))
+            
+            # Add page break every 40 files
+            if i > 0 and i % 40 == 0 and i < len(all_pii_files):
+                elements.append(PageBreak())
+                elements.append(Paragraph(
+                    f"All Files with PII (continued - {i+1} to {min(i+40, len(all_pii_files))})", 
+                    self.styles['SubsectionTitle']
+                ))
+                elements.append(Spacer(1, 8))
+        
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph(
+            f"<b>Total Files with PII: {len(all_pii_files)}</b>",
+            self.styles['Normal']
+        ))
         
         return elements
     
