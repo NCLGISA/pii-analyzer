@@ -160,11 +160,12 @@ def analyze_file(
         execution_start = time.time()
         
         # Run the CLI tool with full output capture and timeout
+        # Reduced timeout to 2 minutes to prevent stuck workers
         process = subprocess.run(
             cmd, 
             capture_output=True, 
             text=True, 
-            timeout=300  # 5 minute timeout per file
+            timeout=120  # 2 minute timeout per file (reduced from 5 min)
         )
         
         # Record execution time
@@ -288,7 +289,7 @@ def analyze_file(
             }
     
     except subprocess.TimeoutExpired:
-        error_msg = "Processing timeout (exceeded 5 minutes)"
+        error_msg = "Processing timeout (exceeded 2 minutes)"
         logger.error(f"Worker {worker_id}: {error_msg} for {file_path}")
         
         # Calculate memory usage

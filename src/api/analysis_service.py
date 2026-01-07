@@ -84,9 +84,9 @@ class AnalysisService:
         self._start_time: Optional[datetime] = None
         self._end_time: Optional[datetime] = None
         
-        # Configuration
+        # Configuration - optimized for NFS/I/O bound workloads
         self._workers = int(os.environ.get('PII_WORKERS', calculate_optimal_workers()))
-        self._batch_size = int(os.environ.get('PII_BATCH_SIZE', 100))
+        self._batch_size = int(os.environ.get('PII_BATCH_SIZE', 30))  # Smaller batches for better progress tracking
         self._threshold = float(os.environ.get('PII_THRESHOLD', 0.7))
         self._file_size_limit = int(os.environ.get('PII_FILE_SIZE_LIMIT', 100)) * 1024 * 1024
         

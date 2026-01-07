@@ -3,6 +3,8 @@
 Worker Management Module for PII Analyzer
 Provides functions to manage parallel processing of files
 using the database for tracking and coordination
+
+Performance optimized for high-core count systems with NFS storage.
 """
 
 import concurrent.futures
@@ -15,12 +17,16 @@ import os
 import psutil
 import setproctitle
 import math
+from datetime import datetime
 from typing import Callable, List, Dict, Any, Optional, Tuple
 
 from src.database.db_utils import get_database, PIIDatabase
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Configure logging with more detail
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(process)d] %(message)s'
+)
 logger = logging.getLogger('worker_management')
 
 # Thread-local storage for database connections
@@ -36,17 +42,22 @@ MIN_CPU_UTILIZATION = 60     # Adjusted down to match new target
 MAX_CPU_UTILIZATION = 80     # Reduced from 95% to 80%
 
 # Dynamic scaling parameters
-MAX_BATCH_SIZE = 100         # Reduced from 200 to 100
-MIN_BATCH_SIZE = 50          # Minimum batch size
-SCALING_INTERVAL = 60        # Check utilization every 60 seconds
-WORKER_STEP_SIZE = 20        # Normal worker adjustment step
-WORKER_EMERGENCY_REDUCTION = 50  # Larger reduction when system is overloaded
-BATCH_STEP_SIZE = 25         # Increase/decrease batch size by this amount
+MAX_BATCH_SIZE = 50          # Smaller batches for better progress tracking
+MIN_BATCH_SIZE = 20          # Minimum batch size
+SCALING_INTERVAL = 30        # Check utilization every 30 seconds (faster response)
+WORKER_STEP_SIZE = 10        # Normal worker adjustment step (smaller for stability)
+WORKER_EMERGENCY_REDUCTION = 20  # Larger reduction when system is overloaded
+BATCH_STEP_SIZE = 10         # Increase/decrease batch size by this amount
 
 # Load average thresholds (relative to CPU count)
-# For a 96-core system, MAX_LOAD_FACTOR of 1.5 means alert at load avg > 144
+# For a 32-core system, MAX_LOAD_FACTOR of 1.5 means alert at load avg > 48
 MAX_LOAD_FACTOR = 1.5        # Maximum acceptable load average as a factor of CPU count
 CRITICAL_LOAD_FACTOR = 2.0   # Critical load threshold that triggers emergency measures
+
+# Worker timeout and monitoring
+WORKER_TIMEOUT_SECONDS = 120  # 2 minutes per file (reduced from 5 minutes)
+STALLED_WORKER_CHECK_INTERVAL = 30  # Check for stalled workers every 30 seconds
+MAX_CONSECUTIVE_ERRORS = 10  # Stop batch if too many consecutive errors
 
 def get_thread_db(db_path: str) -> PIIDatabase:
     """
@@ -125,6 +136,8 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
     Calculate the optimal number of worker processes based on system resources.
     If current_workers and utilization_info are provided, will adjust based on current performance.
     
+    Optimized for systems with NFS storage where I/O latency is significant.
+    
     Args:
         current_workers: Current number of workers (if already running)
         utilization_info: Current system utilization metrics
@@ -147,7 +160,7 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
             if current_load_factor > CRITICAL_LOAD_FACTOR:
                 # Aggressive reduction to quickly relieve system pressure
                 reduction = min(WORKER_EMERGENCY_REDUCTION, current_workers // 3)
-                new_workers = max(32, current_workers - reduction)
+                new_workers = max(8, current_workers - reduction)
                 logger.warning(f"CRITICAL SYSTEM LOAD: Load factor {current_load_factor:.2f} exceeds threshold {CRITICAL_LOAD_FACTOR}. Aggressively reducing workers from {current_workers} to {new_workers}")
                 return new_workers
                 
@@ -155,7 +168,7 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
             if current_load_factor > MAX_LOAD_FACTOR:
                 # Standard reduction to relieve system pressure
                 reduction = min(WORKER_STEP_SIZE * 2, current_workers // 5)
-                new_workers = max(32, current_workers - reduction)
+                new_workers = max(8, current_workers - reduction)
                 logger.warning(f"HIGH SYSTEM LOAD: Load factor {current_load_factor:.2f} exceeds threshold {MAX_LOAD_FACTOR}. Reducing workers from {current_workers} to {new_workers}")
                 return new_workers
             
@@ -171,7 +184,7 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
             elif current_cpu > MAX_CPU_UTILIZATION or current_memory > 90:
                 # Decrease to avoid system overload
                 adjustment = WORKER_STEP_SIZE
-                new_workers = max(32, current_workers - adjustment)
+                new_workers = max(8, current_workers - adjustment)
                 logger.info(f"System pressure detected (CPU: {current_cpu}%, Memory: {current_memory}%), decreasing workers from {current_workers} to {new_workers}")
                 return new_workers
                 
@@ -180,59 +193,65 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
                 logger.debug(f"Current CPU utilization {current_cpu}% is in acceptable range, maintaining {current_workers} workers")
                 return current_workers
         
-        # For 96-core high-memory systems, optimize for maximum parallelism
+        # For 96+ core high-memory systems
         if cpu_count >= 96:
-            # Use 70% of available cores (reduced from 90% to be more conservative)
-            base_workers = int(cpu_count * 0.7)
+            # Use 50% of available cores to avoid context switching overhead
+            base_workers = int(cpu_count * 0.5)
             
-            # Calculate workers based on memory (assume ~500MB per worker)
-            max_by_memory = int((memory_gb * 0.9) / 0.5)
+            # Calculate workers based on memory (assume ~1GB per worker with Presidio)
+            max_by_memory = int((memory_gb * 0.7) / 1.0)
             
-            # Ensure we use at least 256 workers on high-end systems (reduced from 350)
-            optimal_workers = min(max(256, base_workers), max_by_memory)
+            optimal_workers = min(base_workers, max_by_memory, 64)
             
             logger.info(f"High-end system detected. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
             return optimal_workers
         
-        # For 32-64 core systems
+        # For 32-64 core systems (like our target 32-core server)
         elif cpu_count >= 32:
-            # For 32+ CPU systems, ensure we can use at least 256 workers
-            # on systems with sufficient memory
-            base_workers = max(2, int(cpu_count * 0.9))
-            max_by_memory = int((memory_gb * 0.9) / 0.5)
-            min_workers_high_end = min(256, int(memory_gb / 2))
-            optimal_workers = max(min(base_workers, max_by_memory), min_workers_high_end)
+            # For I/O bound work with NFS, use fewer workers to avoid network congestion
+            # Each worker does: NFS read -> Tika request -> PII analysis -> DB write
+            # With 8 Tika instances, optimal is around 16-24 workers
+            base_workers = min(24, int(cpu_count * 0.75))
+            
+            # Memory check (assume ~1GB per worker)
+            max_by_memory = int((memory_gb * 0.6) / 1.0)
+            
+            optimal_workers = min(base_workers, max_by_memory)
+            
+            logger.info(f"32+ core system detected. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
+            return optimal_workers
+        
+        # For 8-32 core systems
+        elif cpu_count >= 8:
+            # Use 80% of cores
+            base_workers = max(4, int(cpu_count * 0.8))
+            max_by_memory = int((memory_gb * 0.6) / 1.0)
+            optimal_workers = min(base_workers, max_by_memory)
+            
+            logger.info(f"Mid-range system. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
+            return optimal_workers
         
         # Standard calculation for smaller systems
         else:
-            # Calculate base worker count based on CPU
-            # Use 90% of available cores
+            # Use most of available cores for smaller systems
             base_workers = max(2, int(cpu_count * 0.9))
-            
-            # Adjust based on memory - each worker might use ~500MB
-            # Allow up to 90% of system memory for workers
-            max_by_memory = int((memory_gb * 0.9) / 0.5)
-            
-            # Take the minimum to avoid oversubscription
+            max_by_memory = int((memory_gb * 0.6) / 1.0)
             optimal_workers = min(base_workers, max_by_memory)
-        
-        logger.info(f"Calculated optimal workers: {optimal_workers} (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
-        return optimal_workers
+            
+            logger.info(f"Small system. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
+            return optimal_workers
     
     except Exception as e:
         logger.warning(f"Error calculating optimal workers: {e}, using fallback value")
-        # Fallback to a more aggressive value based on CPU count if available
-        if 'cpu_count' in locals():
-            return max(32, int(cpu_count * 0.8))
-        # Conservative fallback if CPU count isn't available
-        return 32
+        # Conservative fallback
+        return 16
 
 def process_files_parallel(
     db: PIIDatabase,
     job_id: int,
     processing_func: Callable[[str, Dict[str, Any]], Dict[str, Any]],
     max_workers: Optional[int] = None,
-    batch_size: int = 100,  # Increased from 10 to 100
+    batch_size: int = 50,  # Smaller batches for better progress tracking
     max_files: Optional[int] = None,
     settings: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -362,8 +381,13 @@ def process_files_parallel(
                 files_remaining = False
                 break
             
-            # Log batch information
-            logger.info(f"Processing batch of {len(pending_files)} files")
+            # Log batch information with sample file paths
+            batch_start_timestamp = datetime.now().isoformat()
+            sample_files = [os.path.basename(f[1]) for f in pending_files[:3]]
+            logger.info(f"[{batch_start_timestamp}] Processing batch of {len(pending_files)} files. Sample: {sample_files}")
+            
+            # Track file submissions for monitoring
+            submitted_files = {}
             
             # Submit jobs to process pool
             futures = []
@@ -374,31 +398,58 @@ def process_files_parallel(
                     worker_settings = settings.copy()
                     worker_settings['worker_id'] = i
                     
-                    futures.append(
-                        executor.submit(
-                            process_single_file_process_safe,
-                            file_id,
-                            file_path,
-                            db_path,
-                            job_id,
-                            worker_settings
-                        )
+                    future = executor.submit(
+                        process_single_file_process_safe,
+                        file_id,
+                        file_path,
+                        db_path,
+                        job_id,
+                        worker_settings
                     )
+                    futures.append(future)
+                    submitted_files[future] = {
+                        'file_id': file_id,
+                        'file_path': file_path,
+                        'submitted_at': time.time()
+                    }
             
-            # Wait for the batch to complete
+            # Wait for the batch to complete with timeout monitoring
             batch_start_time = time.time()
             batch_files_processed = 0
+            batch_files_succeeded = 0
+            batch_files_failed = 0
             stop_requested = False
-            for future in concurrent.futures.as_completed(futures):
+            consecutive_errors = 0
+            slow_files = []
+            
+            for future in concurrent.futures.as_completed(futures, timeout=WORKER_TIMEOUT_SECONDS * 2):
                 # Check for stop request during batch processing
                 if stop_event is not None and stop_event.is_set():
                     stop_requested = True
                     logger.info("Stop event detected during batch processing")
                     # Continue processing to allow graceful completion of already-started work
                     # but don't submit new batches
+                
                 try:
-                    result = future.result()
+                    # Get file info for this future
+                    file_info = submitted_files.get(future, {})
+                    file_path = file_info.get('file_path', 'unknown')
+                    file_id = file_info.get('file_id', 0)
+                    submitted_at = file_info.get('submitted_at', batch_start_time)
+                    
+                    result = future.result(timeout=WORKER_TIMEOUT_SECONDS)
                     batch_files_processed += 1
+                    
+                    # Calculate processing time
+                    file_processing_time = time.time() - submitted_at
+                    
+                    # Log slow files (> 30 seconds)
+                    if file_processing_time > 30:
+                        slow_files.append({
+                            'path': os.path.basename(file_path),
+                            'time': file_processing_time
+                        })
+                        logger.warning(f"SLOW FILE: {os.path.basename(file_path)} took {file_processing_time:.1f}s")
                     
                     if result.get('success', False):
                         # Update the database with results
@@ -411,11 +462,23 @@ def process_files_parallel(
                         db.mark_file_completed(result['file_id'], job_id)
                         stats_queue.add_processed()
                         processed_count += 1
+                        batch_files_succeeded += 1
+                        consecutive_errors = 0  # Reset error counter on success
+                        
+                        # Log individual file completion for debugging
+                        entity_count = len(result.get('entities', []))
+                        logger.debug(f"Completed: {os.path.basename(file_path)} - {entity_count} entities in {file_processing_time:.1f}s")
                     else:
                         # Mark as error
-                        db.mark_file_error(result['file_id'], job_id, result.get('error_message', 'Unknown error'))
+                        error_msg = result.get('error_message', 'Unknown error')
+                        db.mark_file_error(result['file_id'], job_id, error_msg)
                         stats_queue.add_error()
                         error_count += 1
+                        batch_files_failed += 1
+                        consecutive_errors += 1
+                        
+                        # Log error details
+                        logger.warning(f"Failed: {os.path.basename(file_path)} - {error_msg[:100]}")
                     
                     # Call progress callback if provided
                     if progress_callback:
@@ -427,16 +490,39 @@ def process_files_parallel(
                             'error': result.get('error_message') if not result.get('success', False) else None
                         })
                     
-                    # Check progress more frequently
+                    # Log progress every 10 files or every 30 seconds
                     total_processed = processed_count + error_count
-                    if total_processed % 5 == 0 and total_processed > 0:
+                    if total_processed % 10 == 0 and total_processed > 0:
                         elapsed = time.time() - start_time
                         rate = total_processed / elapsed if elapsed > 0 else 0
-                        logger.info(f"Processed {total_processed} files in {elapsed:.2f}s ({rate:.2f} files/sec)")
+                        mem = psutil.virtual_memory()
+                        logger.info(f"Progress: {total_processed} files in {elapsed:.1f}s ({rate:.2f}/sec) | Memory: {mem.percent:.1f}% | Errors: {error_count}")
+                    
+                    # Check for too many consecutive errors
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping batch")
+                        stop_requested = True
                         
+                except concurrent.futures.TimeoutError:
+                    # Handle timeout - file took too long
+                    file_info = submitted_files.get(future, {})
+                    file_path = file_info.get('file_path', 'unknown')
+                    file_id = file_info.get('file_id', 0)
+                    
+                    logger.error(f"TIMEOUT: {os.path.basename(file_path)} exceeded {WORKER_TIMEOUT_SECONDS}s")
+                    
+                    if file_id:
+                        db.mark_file_error(file_id, job_id, f"Processing timeout ({WORKER_TIMEOUT_SECONDS}s)")
+                    
+                    error_count += 1
+                    batch_files_failed += 1
+                    consecutive_errors += 1
+                    
                 except Exception as e:
                     logger.error(f"Worker process error: {e}")
                     error_count += 1
+                    batch_files_failed += 1
+                    consecutive_errors += 1
                     
                     # Call progress callback for errors if provided
                     if progress_callback:
@@ -445,10 +531,17 @@ def process_files_parallel(
                             'error': str(e)
                         })
             
-            # Log batch statistics
+            # Log detailed batch statistics
             batch_elapsed = time.time() - batch_start_time
             batch_rate = batch_files_processed / batch_elapsed if batch_elapsed > 0 else 0
-            logger.info(f"Batch completed: {batch_files_processed} files in {batch_elapsed:.2f}s ({batch_rate:.2f} files/sec)")
+            success_rate = (batch_files_succeeded / batch_files_processed * 100) if batch_files_processed > 0 else 0
+            
+            logger.info(f"Batch completed: {batch_files_processed} files ({batch_files_succeeded} OK, {batch_files_failed} failed) in {batch_elapsed:.1f}s ({batch_rate:.2f}/sec, {success_rate:.0f}% success)")
+            
+            # Log slow files summary if any
+            if slow_files:
+                avg_slow_time = sum(f['time'] for f in slow_files) / len(slow_files)
+                logger.warning(f"Slow files in batch: {len(slow_files)}, avg time: {avg_slow_time:.1f}s")
             
             # If stop was requested during this batch, exit the loop
             if stop_requested:

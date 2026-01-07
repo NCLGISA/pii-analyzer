@@ -11,6 +11,9 @@ from .tika_load_balancer import TikaLoadBalancer
 # Default Tika server settings
 DEFAULT_TIKA_SERVER = "http://localhost:9998"
 
+# Tika request timeout (seconds)
+TIKA_REQUEST_TIMEOUT = 60  # 1 minute per request
+
 # Initialize Tika
 tika.initVM()
 
@@ -110,7 +113,12 @@ class TikaExtractor:
             logger.info(f"Extracting text from {file_path} using Tika server: {server}")
             
             try:
-                parsed = parser.from_file(file_path, serverEndpoint=server)
+                # Add timeout to Tika request
+                parsed = parser.from_file(
+                    file_path, 
+                    serverEndpoint=server,
+                    requestOptions={'timeout': TIKA_REQUEST_TIMEOUT}
+                )
                 
                 if not parsed:
                     logger.warning(f"Tika returned empty result for {file_path}")
@@ -129,14 +137,19 @@ class TikaExtractor:
             except Exception as e:
                 # Mark the server as having an error
                 self.load_balancer.mark_server_error(server)
-                logger.error(f"Error extracting text from {file_path} using {server}: {e}")
+                error_type = "TIMEOUT" if "timeout" in str(e).lower() else "ERROR"
+                logger.error(f"Tika {error_type} extracting text from {file_path} using {server}: {e}")
                 
                 # Try another server if available
                 another_server = self.load_balancer.get_server()
                 if another_server:
                     logger.info(f"Retrying with alternate Tika server: {another_server}")
                     try:
-                        parsed = parser.from_file(file_path, serverEndpoint=another_server)
+                        parsed = parser.from_file(
+                            file_path, 
+                            serverEndpoint=another_server,
+                            requestOptions={'timeout': TIKA_REQUEST_TIMEOUT}
+                        )
                         
                         if not parsed:
                             logger.warning(f"Tika returned empty result for {file_path}")
@@ -165,7 +178,11 @@ class TikaExtractor:
             logger.info(f"Extracting text from {file_path} using Tika")
             
             try:
-                parsed = parser.from_file(file_path, serverEndpoint=self.tika_server)
+                parsed = parser.from_file(
+                    file_path, 
+                    serverEndpoint=self.tika_server,
+                    requestOptions={'timeout': TIKA_REQUEST_TIMEOUT}
+                )
                 
                 if not parsed:
                     logger.warning(f"Tika returned empty result for {file_path}")
@@ -182,7 +199,8 @@ class TikaExtractor:
                 return text, metadata
                 
             except Exception as e:
-                logger.error(f"Error extracting text from {file_path}: {e}")
+                error_type = "TIMEOUT" if "timeout" in str(e).lower() else "ERROR"
+                logger.error(f"Tika {error_type} extracting text from {file_path}: {e}")
                 raise
             
     def extract_with_ocr_check(self, file_path: str) -> Tuple[str, Dict, bool]:
