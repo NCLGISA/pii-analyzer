@@ -1,205 +1,247 @@
-# PII Analysis System with Resumable Processing
+# PII Analyzer
 
-A comprehensive system for analyzing files for Personally Identifiable Information (PII) with support for resumable processing of large document sets.
-
-## Overview
-
-This project enhances the PII Analyzer with persistent storage and resumable processing capabilities, allowing it to handle extremely large document sets (100,000+ files) efficiently. The system uses SQLite as the storage mechanism to track processing state and store results, enabling it to resume analysis after interruption without duplicating work.
+A high-performance system for analyzing files for Personally Identifiable Information (PII) using Microsoft Presidio, with Docker-based deployment optimized for large-scale document processing.
 
 ## Features
 
-- **Resumable Processing**: Continue processing from where you left off if interrupted
-- **Parallel Processing**: Efficient multi-threaded processing with thread-safe database access
-- **Persistent Storage**: SQLite database for storing all processing results
-- **Progress Tracking**: Real-time progress tracking with estimated completion time
-- **File Classification**: Automatic file type detection and classification
-- **Detailed Reporting**: Comprehensive statistics on processed files and found entities
-- **Export Capabilities**: Export results to JSON format for compatibility with other tools
-- **Command-Line Interface**: Robust CLI with many customization options
-- **Detached Mode**: Run processes in the background that survive SSH disconnections
-- **Process Management**: List and follow logs of detached processes
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.6+
-- Required Python packages:
-  - sqlite3 (standard library)
-  - concurrent.futures (standard library)
-  - argparse (standard library)
-
-### Installation
-
-Clone the repository and navigate to the project directory:
-
-```bash
-git clone https://github.com/yourusername/pii-analysis.git
-cd pii-analysis
-```
-
-### Basic Usage
-
-Process a directory for PII:
-
-```bash
-python src/process_files.py /path/to/documents --db-path results.db
-```
-
-Resume processing after interruption:
-
-```bash
-python src/process_files.py /path/to/documents --db-path results.db --resume
-```
-
-Process with 8 worker threads:
-
-```bash
-python src/process_files.py /path/to/documents --workers 8
-```
-
-Export results to JSON:
-
-```bash
-python src/process_files.py --db-path results.db --export results.json
-```
-
-Show job status:
-
-```bash
-python src/process_files.py --db-path results.db --status
-```
-
-Run in detached mode (continues even if you log off):
-
-```bash
-python src/process_files.py /path/to/documents --detach
-```
-
-List all detached processes:
-
-```bash
-python src/process_files.py --list-detached
-```
-
-Follow output of a detached process:
-
-```bash
-python src/process_files.py --follow <pid_or_timestamp>
-```
-
-For more options:
-
-```bash
-python src/process_files.py --help
-```
+- **PII Detection**: Leverages Microsoft Presidio for detecting SSNs, credit cards, emails, phone numbers, and more
+- **Scalable Architecture**: Distributed Apache Tika cluster for document text extraction
+- **Resumable Processing**: Continue from where you left off if processing is interrupted
+- **Parallel Processing**: Multi-process architecture for high throughput
+- **OCR Support**: Tesseract OCR for scanned documents and images
+- **Web Dashboard**: Real-time monitoring of analysis progress and results
+- **Persistent Storage**: SQLite database for tracking processing state and results
+- **Docker Deployment**: Production-ready containerized stack
 
 ## Architecture
 
-The system consists of several key components:
-
-1. **Database Utilities** (`src/database/db_utils.py`): 
-   - SQLite database connection and management
-   - Schema creation and version management
-   - Query and transaction functionality
-
-2. **File Discovery** (`src/core/file_discovery.py`):
-   - Directory scanning and file registration
-   - File filtering by type/extension
-   - Resumption point detection
-   - Status management
-
-3. **Worker Management** (`src/core/worker_management.py`):
-   - Thread-safe parallel processing
-   - Progress tracking and reporting
-   - Result storage coordination
-
-4. **Command-Line Interface** (`src/process_files.py`):
-   - User-facing command-line tool
-   - Job management and control
-   - Status reporting and export functionality
-   - Detached process management
-
-## Database Schema
-
-The SQLite database schema includes the following tables:
-
-- `jobs`: Job metadata and overall status
-- `job_metadata`: Additional metadata for jobs
-- `files`: Individual file information and processing status
-- `results`: Processing results for each file
-- `entities`: Individual PII entities found in files
-
-## Advanced Usage
-
-### Processing Specific File Types
-
-Limit processing to specific file extensions:
-
-```bash
-python src/process_files.py /path/to/documents --extensions txt,pdf,docx
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Docker Network                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              Apache Tika Cluster (8 instances)            │   │
+│  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐                     │   │
+│  │  │Tika 1│ │Tika 2│ │Tika 3│ │Tika 4│  ...               │   │
+│  │  └──────┘ └──────┘ └──────┘ └──────┘                     │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    PII Analyzer                           │   │
+│  │   • Parallel worker processes                             │   │
+│  │   • Presidio PII detection                                │   │
+│  │   • OCR support via Tesseract                             │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                    Dashboard (Flask)                      │   │
+│  │                    Port 8080                              │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Limiting Processing
+## Quick Start
 
-Process only a specific number of files:
+### Prerequisites
 
-```bash
-python src/process_files.py /path/to/documents --max-files 1000
-```
+- Docker 20.10+
+- Docker Compose 2.0+
+- Data directory accessible to Docker
 
-### Batch Size Control
+### Deployment
 
-Adjust the batch size for processing:
-
-```bash
-python src/process_files.py /path/to/documents --batch-size 50
-```
-
-### Detached Processing
-
-Running in detached mode is particularly useful for:
-- Long-running jobs that need to continue after SSH sessions end
-- Processing on remote servers where maintaining connections is impractical
-- Background processing of large document sets
-
-When using detached mode, the system:
-1. Creates a logs directory to store output
-2. Records the PID of the background process
-3. Provides utilities to monitor and follow the process
-
-Example workflow:
+1. **Clone and prepare:**
 
 ```bash
-# Start a process in detached mode
-python src/process_files.py /path/to/documents --detach
-
-# List all running and completed detached processes
-python src/process_files.py --list-detached
-
-# View real-time output of a running process
-python src/process_files.py --follow <pid>
-
-# Check database status of the process
-python src/process_files.py --db-path results.db --status
+git clone https://github.com/yourusername/pii-analyzer.git
+cd pii-analyzer
+mkdir -p db logs
+cp env.prod.example .env
 ```
 
-## Implementation Details
+2. **Configure environment (optional):**
 
-The system is designed with the following principles:
+```bash
+# Edit .env to set a dashboard password
+nano .env
+```
 
-1. **Efficiency**: Minimizes repeated work through persistent tracking
-2. **Scalability**: Handles extremely large document sets through batched processing
-3. **Reliability**: Tolerates interruptions and system crashes
-4. **Thread-safety**: Uses thread-local storage for database connections
-5. **Atomicity**: Ensures database operations are atomic even with multiple workers
-6. **Persistence**: Processes can continue running independently of user sessions
+3. **Build and start:**
+
+```bash
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
+```
+
+4. **Access the dashboard:**
+
+Open `http://localhost:8080` in your browser.
+
+## Configuration
+
+### Environment Variables
+
+Copy `env.prod.example` to `.env` and customize:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DASHBOARD_PASSWORD` | (none) | Password to protect dashboard access |
+| `PII_WORKERS` | 28 | Number of parallel worker processes |
+| `PII_BATCH_SIZE` | 100 | Batch size for processing |
+| `PII_THRESHOLD` | 0.7 | Confidence threshold for PII detection (0.0-1.0) |
+| `PII_FILE_SIZE_LIMIT` | 100 | Maximum file size in MB |
+| `LOG_LEVEL` | INFO | Logging verbosity |
+
+### Resource Allocation (128GB RAM / 32 Cores)
+
+The default configuration is optimized for a 128GB RAM / 32-core server:
+
+| Service | CPU | RAM | Instances |
+|---------|-----|-----|-----------|
+| Tika | 2 cores each | 4GB each | 8 |
+| PII Analyzer | 28 cores | 80GB | 1 |
+| Dashboard | 2 cores | 2GB | 1 |
+
+For smaller servers, reduce worker count and Tika instances in `docker-compose.prod.yml`.
+
+## Usage
+
+### Analyzing Data
+
+Mount your data directory at `/data` on the Docker host. The analyzer will automatically scan and process all files.
+
+```bash
+# Start analysis
+docker compose -f docker-compose.prod.yml up -d
+
+# View progress
+docker logs -f pii-analyzer
+```
+
+### Resume After Interruption
+
+The analyzer automatically resumes from where it left off:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d pii-analyzer
+```
+
+### Export Results
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm pii-analyzer \
+    python -m src.process_files \
+    --db-path /app/db/pii_results.db \
+    --export /app/db/results.json
+```
+
+### Check Status
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm pii-analyzer \
+    python -m src.process_files \
+    --db-path /app/db/pii_results.db \
+    --status
+```
+
+### Clear Results and Re-analyze
+
+```bash
+docker compose -f docker-compose.prod.yml stop pii-analyzer
+rm -rf db/*
+docker compose -f docker-compose.prod.yml up -d pii-analyzer
+```
+
+## Supported File Types
+
+The analyzer processes documents using Apache Tika for text extraction:
+
+| Category | Extensions |
+|----------|------------|
+| Documents | PDF, DOCX, DOC, ODT, RTF, TXT |
+| Spreadsheets | XLSX, XLS, ODS, CSV |
+| Presentations | PPTX, PPT, ODP |
+| Email | EML, MSG, MBOX |
+| Archives | ZIP, TAR, GZ (contents extracted) |
+| Images (OCR) | PNG, JPG, JPEG, TIFF, BMP |
+
+## PII Types Detected
+
+Using Microsoft Presidio, the analyzer detects:
+
+- Social Security Numbers (SSN)
+- Credit Card Numbers
+- Email Addresses
+- Phone Numbers
+- Names (PERSON)
+- Addresses (LOCATION)
+- IP Addresses
+- Dates of Birth
+- Driver's License Numbers
+- Passport Numbers
+- And more...
+
+## Project Structure
+
+```
+pii-analyzer/
+├── src/
+│   ├── analyzers/          # Presidio PII detection
+│   ├── anonymizers/        # PII redaction (optional)
+│   ├── core/               # File discovery & worker management
+│   ├── database/           # SQLite persistence
+│   ├── extractors/         # Tika text extraction & OCR
+│   └── utils/              # Logging & file utilities
+├── dashboard/              # Flask web dashboard
+├── tests/                  # Unit tests
+├── scripts/                # Deployment helper scripts
+├── Dockerfile.prod         # PII Analyzer container
+├── Dockerfile.dashboard    # Dashboard container
+├── docker-compose.prod.yml # Production stack
+└── env.prod.example        # Environment template
+```
+
+## Monitoring
+
+### Container Status
+
+```bash
+docker compose -f docker-compose.prod.yml ps
+```
+
+### Resource Usage
+
+```bash
+docker stats
+```
+
+### Logs
+
+```bash
+# All services
+docker compose -f docker-compose.prod.yml logs -f
+
+# Specific service
+docker compose -f docker-compose.prod.yml logs -f pii-analyzer
+```
+
+## Troubleshooting
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed troubleshooting guidance covering:
+
+- Out of memory errors
+- Tika connection issues
+- Dashboard problems
+- Performance optimization
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-* North Carolina Breach Notification Requirements
-* UNC Data Classification Framework 

@@ -11,94 +11,66 @@ A Flask web application that provides real-time visualization of PII analysis pr
 - Error analysis and categorization
 - Mobile-responsive design
 - Auto-refreshing data
+- Optional password protection
 
 ## Screenshots
 
 (Add screenshots once the dashboard is running)
 
-## Requirements
+## Usage with Docker (Recommended)
+
+The dashboard is deployed as part of the PII Analyzer Docker stack:
+
+```bash
+# Start the full stack (includes dashboard on port 8080)
+docker compose -f docker-compose.prod.yml up -d
+
+# Access the dashboard
+open http://localhost:8080
+```
+
+See the main [README.md](../README.md) for full deployment instructions.
+
+## Standalone Development
+
+### Requirements
 
 - Python 3.6+
 - Flask and dependencies (see requirements.txt)
 - Access to a PII analysis database
 
-## Installation
-
-1. Install the required packages:
+### Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Set up environment variables (optional):
+### Running
 
 ```bash
-export PII_DB_PATH=/path/to/your/pii_results.db
-export PORT=5000  # Change if needed
-```
-
-## Usage
-
-### Running the Dashboard
-
-Run the dashboard with the default database path:
-
-```bash
+# Default database path
 python app.py
-```
 
-Or specify a custom database path:
-
-```bash
+# Custom database path
 python app.py --db-path=/path/to/your/pii_results.db
+
+# With password protection
+python app.py --password your_secure_password
+
+# Or via environment variable
+DASHBOARD_PASSWORD=your_secure_password python app.py
 ```
 
-### Accessing the Dashboard
+Access the dashboard at: `http://localhost:5000`
 
-Once running, access the dashboard at:
-
-```
-http://localhost:5000
-```
-
-### Cloudflare Tunnel (Optional)
-
-To access the dashboard from outside your network, you can set up a Cloudflare tunnel:
-
-1. Install cloudflared:
-
-```bash
-# On macOS
-brew install cloudflare/cloudflare/cloudflared
-
-# On Linux
-# Follow instructions at https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation
-```
-
-2. Run a tunnel to your dashboard:
-
-```bash
-cloudflared tunnel --url http://localhost:5000
-```
-
-3. Access the dashboard using the provided URL.
-
-## Development
-
-The dashboard is built with:
-
-- Flask backend
-- Bootstrap 5 CSS framework
-- Chart.js for data visualization
-- JavaScript for interactivity
-
-### Project Structure
+## Project Structure
 
 ```
 dashboard/
 ├── app.py                 # Flask application
 ├── templates/             # HTML templates
-│   └── index.html         # Main dashboard template
+│   ├── index.html         # Main dashboard template
+│   └── login.html         # Login page (password protection)
 ├── static/                # Static files
 │   ├── css/               # CSS stylesheets
 │   │   └── dashboard.css  # Dashboard styles
@@ -109,10 +81,15 @@ dashboard/
 └── README.md              # This file
 ```
 
+## Development
+
+The dashboard is built with:
+
+- Flask backend
+- Bootstrap 5 CSS framework
+- Chart.js for data visualization
+- JavaScript for interactivity
+
 ## License
 
-This project is part of the PII analysis system.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. 
+This project is part of the PII Analyzer system.

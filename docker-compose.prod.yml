@@ -1,0 +1,211 @@
+# Production Docker Compose for PII Analyzer
+# Optimized for 128GB RAM / 32-core systems
+#
+# Resource Allocation:
+#   - 8x Tika containers: 32GB total (4GB each)
+#   - PII Analyzer:       80GB RAM, 28 CPUs
+#   - Dashboard:          2GB RAM, 2 CPUs
+#   - OS/Overhead:        ~14GB reserved
+#
+# Usage:
+#   docker-compose -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+x-tika-common: &tika-common
+  image: apache/tika:2.9.1.0
+  restart: unless-stopped
+  networks:
+    - pii-network
+  healthcheck:
+    # Use /dev/tcp to check if port is open (works without curl/wget)
+    test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9998' || exit 1"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 90s
+  deploy:
+    resources:
+      limits:
+        cpus: '2'
+        memory: 4G
+      reservations:
+        cpus: '1'
+        memory: 2G
+
+services:
+  # ============================================================
+  # Apache Tika Cluster (8 instances for document extraction)
+  # ============================================================
+  tika1:
+    <<: *tika-common
+    container_name: pii-tika-1
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika2:
+    <<: *tika-common
+    container_name: pii-tika-2
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika3:
+    <<: *tika-common
+    container_name: pii-tika-3
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika4:
+    <<: *tika-common
+    container_name: pii-tika-4
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika5:
+    <<: *tika-common
+    container_name: pii-tika-5
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika6:
+    <<: *tika-common
+    container_name: pii-tika-6
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika7:
+    <<: *tika-common
+    container_name: pii-tika-7
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  tika8:
+    <<: *tika-common
+    container_name: pii-tika-8
+    environment:
+      - JAVA_OPTS=-Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+
+  # ============================================================
+  # PII Analyzer - Main Processing Container
+  # ============================================================
+  pii-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: pii-analyzer
+    restart: "no"
+    depends_on:
+      tika1:
+        condition: service_healthy
+      tika2:
+        condition: service_healthy
+      tika3:
+        condition: service_healthy
+      tika4:
+        condition: service_healthy
+      tika5:
+        condition: service_healthy
+      tika6:
+        condition: service_healthy
+      tika7:
+        condition: service_healthy
+      tika8:
+        condition: service_healthy
+    networks:
+      - pii-network
+    volumes:
+      # Data directory (read-only for safety)
+      - /data:/data:ro
+      # Database persistence
+      - ./db:/app/db
+      # Logs persistence
+      - ./logs:/app/logs
+    environment:
+      # Tika cluster endpoints
+      - TIKA_SERVER_ENDPOINTS=http://tika1:9998,http://tika2:9998,http://tika3:9998,http://tika4:9998,http://tika5:9998,http://tika6:9998,http://tika7:9998,http://tika8:9998
+      - USE_TIKA_LOAD_BALANCER=true
+      # Database location
+      - PII_DB_PATH=/app/db/pii_results.db
+      # Processing settings
+      - PII_WORKERS=28
+      - PII_BATCH_SIZE=100
+      - PII_THRESHOLD=0.7
+      # OCR settings
+      - OCR_DPI=300
+      - OCR_THREADS=2
+      # Performance tuning
+      - PYTHONOPTIMIZE=1
+    deploy:
+      resources:
+        limits:
+          cpus: '28'
+          memory: 80G
+        reservations:
+          cpus: '20'
+          memory: 40G
+    # Default command - can be overridden
+    command: >
+      python -m src.process_files
+      /data
+      --db-path /app/db/pii_results.db
+      --workers 28
+      --batch-size 100
+      --threshold 0.7
+      --ocr
+      --ocr-dpi 300
+      --verbose
+
+  # ============================================================
+  # Dashboard - Web UI for viewing results
+  # ============================================================
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: pii-dashboard
+    restart: unless-stopped
+    depends_on:
+      - pii-analyzer
+    networks:
+      - pii-network
+    ports:
+      - "8080:5000"
+    volumes:
+      # Database access (read-only is sufficient for dashboard)
+      - ./db:/app/db:ro
+    environment:
+      - PII_DB_PATH=/app/db/pii_results.db
+      - FLASK_ENV=production
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    command: >
+      python /app/dashboard/app.py
+      --port 5000
+      --db-path /app/db/pii_results.db
+
+networks:
+  pii-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  pii-db:
+    driver: local
+  pii-logs:
+    driver: local
+

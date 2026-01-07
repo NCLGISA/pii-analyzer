@@ -1,0 +1,51 @@
+# Dashboard Dockerfile for PII Analyzer
+# Lightweight Flask application for viewing analysis results
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    FLASK_ENV=production
+
+WORKDIR /app
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r dashboard && useradd -r -g dashboard dashboard
+
+# Copy requirements - dashboard has its own lighter requirements
+COPY dashboard/requirements.txt /app/dashboard/requirements.txt
+
+# Install Python dependencies for dashboard
+RUN pip install --no-cache-dir -r /app/dashboard/requirements.txt
+
+# Also need some core dependencies for database access
+RUN pip install --no-cache-dir rich==13.7.0
+
+# Copy application code (only what's needed for dashboard)
+COPY --chown=dashboard:dashboard src/ /app/src/
+COPY --chown=dashboard:dashboard dashboard/ /app/dashboard/
+COPY --chown=dashboard:dashboard strict_nc_breach_pii.py /app/
+COPY --chown=dashboard:dashboard inspect_db.py /app/
+
+# Create directory for database access
+RUN mkdir -p /app/db && chown -R dashboard:dashboard /app
+
+USER dashboard
+
+# Expose dashboard port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:5000/ || exit 1
+
+# Run the dashboard
+CMD ["python", "/app/dashboard/app.py", "--port", "5000"]
+

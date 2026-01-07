@@ -914,11 +914,15 @@ def main():
     
     args = parse_args()
     
-    # Set password if provided
+    # Set password if provided (CLI arg takes precedence over env var)
     if args.password:
         dashboard_password = args.password
         password_required = True
-        logger.info("Password protection enabled")
+        logger.info("Password protection enabled (from CLI argument)")
+    elif os.environ.get('DASHBOARD_PASSWORD'):
+        dashboard_password = os.environ.get('DASHBOARD_PASSWORD')
+        password_required = True
+        logger.info("Password protection enabled (from environment variable)")
     
     # Generate a secret key for sessions
     app.secret_key = secrets.token_hex(16)
