@@ -206,17 +206,19 @@ def calculate_optimal_workers(current_workers: Optional[int] = None, utilization
             logger.info(f"High-end system detected. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
             return optimal_workers
         
-        # For 32-64 core systems (like our target 32-core server)
+        # For 32-64 core systems (like our target 32-core, 128GB server)
         elif cpu_count >= 32:
-            # For I/O bound work with NFS, use fewer workers to avoid network congestion
-            # Each worker does: NFS read -> Tika request -> PII analysis -> DB write
-            # With 8 Tika instances, optimal is around 16-24 workers
-            base_workers = min(24, int(cpu_count * 0.75))
+            # For high-performance systems with fast NFS (10Gbit + NVMe cache)
+            # More workers can be sustained with good I/O infrastructure
+            # Use ~90% of cores to keep system responsive
+            base_workers = int(cpu_count * 0.9)
             
-            # Memory check (assume ~1GB per worker)
+            # Memory check (assume ~1GB per worker with spacy models)
             max_by_memory = int((memory_gb * 0.6) / 1.0)
             
-            optimal_workers = min(base_workers, max_by_memory)
+            # Cap at 8x Tika instances * 4 concurrent requests each = 32
+            # But allow more if system can handle it
+            optimal_workers = min(base_workers, max_by_memory, 48)
             
             logger.info(f"32+ core system detected. Using {optimal_workers} workers (CPU: {cpu_count}, Memory: {memory_gb:.1f}GB)")
             return optimal_workers

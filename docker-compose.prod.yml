@@ -141,9 +141,9 @@ services:
       # Data path for analysis
       - PII_DATA_PATH=/data
       # Processing settings (used when analysis is started via web UI)
-      # Reduced workers for NFS I/O bound workloads - prevents network congestion
-      - PII_WORKERS=16
-      - PII_BATCH_SIZE=30
+      # Optimized for 32-core, 128GB RAM with fast NFS (10Gbit + NVMe cache)
+      - PII_WORKERS=28
+      - PII_BATCH_SIZE=50
       - PII_THRESHOLD=0.7
       - PII_FILE_SIZE_LIMIT=100
       # OCR settings

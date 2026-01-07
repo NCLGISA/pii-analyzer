@@ -63,7 +63,10 @@ class TikaLoadBalancer:
             return [server for server, status in self.server_status.items() if status]
     
     def get_server(self) -> Optional[str]:
-        """Get next available Tika server using round-robin algorithm with health checks.
+        """Get next available Tika server using random distribution for multi-process workloads.
+        
+        Uses random selection to ensure even distribution across Tika instances
+        when multiple processes are running (each process has its own load balancer).
         
         Returns:
             Server URL or None if no servers are available
@@ -82,10 +85,11 @@ class TikaLoadBalancer:
             if not available_servers:
                 return None
             
-            # Select the server with the lowest request count
-            selected_server = min(available_servers, key=lambda s: self.request_counts[s])
+            # Use random selection for even distribution across processes
+            # This works better than request counting when each process has its own instance
+            selected_server = random.choice(available_servers)
             
-            # Increment request count
+            # Still track request count for stats
             self.request_counts[selected_server] += 1
             
             return selected_server
