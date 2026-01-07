@@ -107,7 +107,7 @@ class AnalysisService:
             'state': self._state.value,
             'job_id': self._current_job_id,
             'is_running': self.is_running,
-            'can_start': self._state == AnalysisState.IDLE,
+            'can_start': self._state in (AnalysisState.IDLE, AnalysisState.COMPLETED, AnalysisState.ERROR),
             'can_stop': self.is_running,
             'data_path': self._data_path,
             'db_path': self._db_path,
@@ -159,6 +159,10 @@ class AnalysisService:
                 'error': 'Analysis is already running',
                 'state': self._state.value
             }
+        
+        # Reset from completed/error state to allow new analysis
+        if self._state in (AnalysisState.COMPLETED, AnalysisState.ERROR):
+            self._state = AnalysisState.IDLE
         
         # Verify data path exists
         if not os.path.isdir(self._data_path):

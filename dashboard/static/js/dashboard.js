@@ -1295,22 +1295,55 @@ function updateAnalysisControlPanel(data) {
             } else {
                 elements.analysisProgressText.textContent = `Processing: ${data.files.completed.toLocaleString()} / ${data.files.total.toLocaleString()} files`;
             }
+        } else if (state === 'completed') {
+            // Show 100% progress when completed
+            elements.analysisProgressContainer.classList.remove('d-none');
+            elements.analysisProgressBar.style.width = '100%';
+            elements.analysisProgressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            elements.analysisProgressBar.classList.add('bg-success');
+            elements.analysisProgressPercent.textContent = '100%';
+            elements.analysisProgressText.textContent = `Completed: ${(data.files?.completed || 0).toLocaleString()} files processed`;
         } else {
             elements.analysisProgressContainer.classList.add('d-none');
+            // Reset progress bar styling for next run
+            elements.analysisProgressBar.classList.add('progress-bar-animated', 'progress-bar-striped');
+            elements.analysisProgressBar.classList.remove('bg-success');
         }
+    }
+    
+    // Also update main dashboard progress bar when analysis is running or completed
+    if (data.files && elements.progressBar) {
+        const mainProgress = data.files.progress_percent || 0;
+        elements.progressBar.style.width = mainProgress + '%';
+        elements.progressBar.textContent = Math.round(mainProgress) + '%';
     }
     
     // Adjust polling interval based on state
     if (previousState !== state) {
+        console.log(`Analysis state changed: ${previousState} -> ${state}`);
         startAnalysisStatusPolling();
         
-        // Refresh dashboard when analysis completes
+        // Refresh dashboard when analysis completes or becomes idle after running
         if ((previousState === 'processing' || previousState === 'scanning') && 
             (state === 'completed' || state === 'idle')) {
+            console.log('Analysis finished, refreshing dashboard...');
             setTimeout(() => {
                 loadJobs();
                 loadDashboardData(true);
-            }, 1000);
+            }, 500);
+        }
+    }
+    
+    // If state is completed or idle and we haven't refreshed recently, refresh now
+    // This handles cases where the state change polling was missed
+    if ((state === 'completed' || state === 'idle') && data.files && data.files.total > 0) {
+        const completedPercent = data.files.progress_percent || 0;
+        const displayedPercent = parseFloat(elements.progressBar?.textContent || '0');
+        
+        // If there's a significant mismatch, refresh the dashboard
+        if (Math.abs(completedPercent - displayedPercent) > 5) {
+            console.log(`Progress mismatch detected (${completedPercent}% vs ${displayedPercent}%), refreshing...`);
+            loadDashboardData(true);
         }
     }
 }
