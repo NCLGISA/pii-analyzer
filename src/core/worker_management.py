@@ -236,7 +236,8 @@ def process_files_parallel(
     max_files: Optional[int] = None,
     settings: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    enable_dynamic_scaling: bool = True  # Enable dynamic scaling by default
+    enable_dynamic_scaling: bool = True,  # Enable dynamic scaling by default
+    stop_event: Optional[threading.Event] = None  # Optional stop event for graceful shutdown
 ) -> Dict[str, Any]:
     """
     Process files in parallel using database to track progress.
@@ -251,6 +252,7 @@ def process_files_parallel(
         settings: Additional settings to pass to processing function
         progress_callback: Optional callback function to report progress
         enable_dynamic_scaling: Whether to dynamically adjust workers and batch size
+        stop_event: Optional threading.Event to signal graceful shutdown
         
     Returns:
         Dictionary with processing statistics
@@ -296,6 +298,11 @@ def process_files_parallel(
     # Use ProcessPoolExecutor for true parallelism
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         while files_remaining and (max_files is None or processed_count < max_files):
+            # Check for stop request
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Stop event detected, stopping file processing")
+                files_remaining = False
+                break
             # Dynamic scaling: periodically check and adjust resources
             if enable_dynamic_scaling and time.time() - last_scaling_check > SCALING_INTERVAL:
                 # Check current CPU and memory utilization
@@ -381,7 +388,14 @@ def process_files_parallel(
             # Wait for the batch to complete
             batch_start_time = time.time()
             batch_files_processed = 0
+            stop_requested = False
             for future in concurrent.futures.as_completed(futures):
+                # Check for stop request during batch processing
+                if stop_event is not None and stop_event.is_set():
+                    stop_requested = True
+                    logger.info("Stop event detected during batch processing")
+                    # Continue processing to allow graceful completion of already-started work
+                    # but don't submit new batches
                 try:
                     result = future.result()
                     batch_files_processed += 1
@@ -435,6 +449,11 @@ def process_files_parallel(
             batch_elapsed = time.time() - batch_start_time
             batch_rate = batch_files_processed / batch_elapsed if batch_elapsed > 0 else 0
             logger.info(f"Batch completed: {batch_files_processed} files in {batch_elapsed:.2f}s ({batch_rate:.2f} files/sec)")
+            
+            # If stop was requested during this batch, exit the loop
+            if stop_requested:
+                files_remaining = False
+                break
             
             # Check for resource exhaustion
             mem = psutil.virtual_memory()
