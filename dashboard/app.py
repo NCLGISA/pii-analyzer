@@ -1077,7 +1077,8 @@ def api_results_download():
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'pii_analysis_results_{timestamp}.json'
         
-        json_content = json.dumps(result['data'], indent=2)
+        # Use default=str to handle datetime objects
+        json_content = json.dumps(result['data'], indent=2, default=str)
         
         return Response(
             json_content,
