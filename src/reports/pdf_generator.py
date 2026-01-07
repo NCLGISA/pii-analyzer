@@ -531,11 +531,13 @@ class PIIReportGenerator:
             cursor = self.db.conn.cursor()
             
             # Get files with SSN, Credit Card, DL, or Passport
+            # Join path: files -> results -> entities
             query = """
                 SELECT DISTINCT f.file_path, GROUP_CONCAT(DISTINCT e.entity_type) as entity_types,
                        COUNT(e.entity_id) as entity_count
                 FROM files f
-                JOIN entities e ON f.file_id = e.file_id
+                JOIN results r ON f.file_id = r.file_id
+                JOIN entities e ON r.result_id = e.result_id
                 WHERE f.job_id = ?
                   AND e.entity_type IN ('US_SSN', 'CREDIT_CARD', 'US_DRIVER_LICENSE', 'US_PASSPORT', 'US_BANK_NUMBER')
                 GROUP BY f.file_id
@@ -644,11 +646,13 @@ class PIIReportGenerator:
         try:
             cursor = self.db.conn.cursor()
             
+            # Join path: files -> results -> entities
             query = """
                 SELECT DISTINCT f.file_path, GROUP_CONCAT(DISTINCT e.entity_type) as entity_types,
                        COUNT(e.entity_id) as entity_count
                 FROM files f
-                JOIN entities e ON f.file_id = e.file_id
+                JOIN results r ON f.file_id = r.file_id
+                JOIN entities e ON r.result_id = e.result_id
                 WHERE f.job_id = ?
                 GROUP BY f.file_id
                 ORDER BY entity_count DESC
@@ -737,11 +741,13 @@ class PIIReportGenerator:
         try:
             cursor = self.db.conn.cursor()
             
-            # Get 10 sample files with their entities
+            # Get sample files with their entities
+            # Join path: files -> results -> entities
             query = """
-                SELECT f.file_path, e.entity_type, e.text, e.score, e.start_pos, e.end_pos
+                SELECT f.file_path, e.entity_type, e.text, e.score, e.start_index, e.end_index
                 FROM files f
-                JOIN entities e ON f.file_id = e.file_id
+                JOIN results r ON f.file_id = r.file_id
+                JOIN entities e ON r.result_id = e.result_id
                 WHERE f.job_id = ?
                 ORDER BY e.score DESC
                 LIMIT 100
