@@ -101,6 +101,8 @@ services:
       context: .
       dockerfile: Dockerfile.unified
     container_name: pii-analyzer
+    # Run as root to ensure access to NFS mounts
+    user: root
     restart: unless-stopped
     depends_on:
       tika1:
