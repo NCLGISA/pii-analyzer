@@ -146,11 +146,15 @@ def analyze_file(
         if ocr_dpi != 300:
             cmd.extend(["--ocr-dpi", str(ocr_dpi)])
         
-        # Always set OCR threads to 1 for better system-wide parallelism
-        cmd.extend(["--ocr-threads", "1"])
+        # OCR threads - default 2 for balance between file parallelism and page parallelism
+        # With 28 workers x 2 OCR threads = 56, slightly oversubscribed on 32 cores but OK
+        effective_ocr_threads = ocr_threads if ocr_threads > 0 else int(os.environ.get('OCR_THREADS', '2'))
+        cmd.extend(["--ocr-threads", str(effective_ocr_threads)])
         
-        if max_pages is not None:
-            cmd.extend(["--max-pages", str(max_pages)])
+        # Limit pages for scanned PDFs to prevent very long processing times
+        # Default 50 pages max unless explicitly set otherwise
+        effective_max_pages = max_pages if max_pages is not None else int(os.environ.get('MAX_PAGES', '50'))
+        cmd.extend(["--max-pages", str(effective_max_pages)])
         
         # Log the command if in debug mode
         if debug:

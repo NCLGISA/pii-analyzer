@@ -144,6 +144,9 @@ services:
       # Optimized for 32-core, 128GB RAM with fast NFS (10Gbit + NVMe cache)
       - PII_WORKERS=28
       - PII_BATCH_SIZE=50
+      # OCR settings - 2 threads per worker, max 50 pages per PDF to avoid very slow scans
+      - OCR_THREADS=2
+      - MAX_PAGES=50
       - PII_THRESHOLD=0.7
       - PII_FILE_SIZE_LIMIT=100
       # OCR settings
