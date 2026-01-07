@@ -151,10 +151,10 @@ def analyze_file(
         effective_ocr_threads = ocr_threads if ocr_threads > 0 else int(os.environ.get('OCR_THREADS', '2'))
         cmd.extend(["--ocr-threads", str(effective_ocr_threads)])
         
-        # Limit pages for scanned PDFs to prevent very long processing times
-        # Default 50 pages max unless explicitly set otherwise
-        effective_max_pages = max_pages if max_pages is not None else int(os.environ.get('MAX_PAGES', '50'))
-        cmd.extend(["--max-pages", str(effective_max_pages)])
+        # Limit pages for scanned PDFs (0 = no limit, process all pages)
+        effective_max_pages = max_pages if max_pages is not None else int(os.environ.get('MAX_PAGES', '0'))
+        if effective_max_pages > 0:
+            cmd.extend(["--max-pages", str(effective_max_pages)])
         
         # Log the command if in debug mode
         if debug:
@@ -164,12 +164,12 @@ def analyze_file(
         execution_start = time.time()
         
         # Run the CLI tool with full output capture and timeout
-        # 2 minute timeout - balance between allowing OCR and detecting stuck files
+        # 5 minute timeout - allows large scanned PDFs to complete OCR
         process = subprocess.run(
             cmd, 
             capture_output=True, 
             text=True, 
-            timeout=120  # 2 minute timeout per file
+            timeout=300  # 5 minute timeout per file
         )
         
         # Record execution time
@@ -293,7 +293,7 @@ def analyze_file(
             }
     
     except subprocess.TimeoutExpired:
-        error_msg = "Processing timeout (exceeded 2 minutes)"
+        error_msg = "Processing timeout (exceeded 5 minutes)"
         logger.error(f"Worker {worker_id}: {error_msg} for {file_path}")
         
         # Calculate memory usage

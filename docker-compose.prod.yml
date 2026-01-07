@@ -145,10 +145,10 @@ services:
       # Reduced workers to prevent CPU overload during intensive OCR
       - PII_WORKERS=16
       - PII_BATCH_SIZE=50
-      # OCR settings - 1 thread per worker (total 16 OCR threads), max 30 pages
-      # This balances throughput vs. system stability for scanned documents
+      # OCR settings - 1 thread per worker, no page limit (process all pages)
+      # 5 minute timeout per file allows large scanned PDFs to complete
       - OCR_THREADS=1
-      - MAX_PAGES=30
+      - MAX_PAGES=0
       - PII_THRESHOLD=0.7
       - PII_FILE_SIZE_LIMIT=100
       # OCR settings
