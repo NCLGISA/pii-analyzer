@@ -58,7 +58,7 @@ CRITICAL_LOAD_FACTOR = 2.0   # Critical load threshold that triggers emergency m
 # Worker timeout and monitoring
 WORKER_TIMEOUT_SECONDS = 300  # 5 minutes per file to allow large scanned PDFs to complete OCR
 STALLED_WORKER_CHECK_INTERVAL = 30  # Check for stalled workers every 30 seconds
-MAX_CONSECUTIVE_ERRORS = 50  # Stop batch if too many consecutive errors (raised for timeout bursts)
+MAX_CONSECUTIVE_ERRORS = 500  # Only stop if truly stuck - many datasets have clusters of unsupported files
 
 def get_thread_db(db_path: str) -> PIIDatabase:
     """
@@ -548,10 +548,18 @@ def process_files_parallel(
                             logger.info(f"Progress: {total_processed} files in {elapsed:.1f}s ({rate:.2f}/sec) | Memory: {mem.percent:.1f}% | Errors: {error_count} | Active workers: {len(active_futures)}")
                         
                         # Check for too many consecutive errors
+                        # Only abort if we've hit the threshold AND processed at least 100 files
+                        # This prevents aborting early when hitting clusters of unsupported files
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                            logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping batch")
-                            stop_requested = True
-                            break
+                            total_done = processed_count + error_count
+                            if total_done >= 100:
+                                logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping batch after {total_done} files")
+                                stop_requested = True
+                                break
+                            else:
+                                # Reset the counter for early batches - likely just hitting unsupported files
+                                logger.warning(f"High error rate ({consecutive_errors} consecutive) but only {total_done} files done - continuing")
+                                consecutive_errors = 0
                             
                     except concurrent.futures.TimeoutError:
                         # Handle timeout - file took too long
