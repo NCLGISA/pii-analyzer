@@ -1490,10 +1490,13 @@ function clearResults() {
 // Download report (PDF or JSON)
 function downloadReport(format) {
     let url;
+    let filename;
     if (format === 'pdf') {
         url = '/api/report/pdf';
+        filename = `pii_analysis_report_${new Date().toISOString().slice(0,10)}.pdf`;
     } else if (format === 'json') {
         url = '/api/results/download';
+        filename = `pii_analysis_results_${new Date().toISOString().slice(0,10)}.json`;
     } else {
         console.error('Unknown format:', format);
         return;
@@ -1503,6 +1506,32 @@ function downloadReport(format) {
         url += `?db_path=${encodeURIComponent(dbPath)}`;
     }
     
-    // Open in new window to trigger download
-    window.open(url, '_blank');
+    console.log(`Downloading ${format} from: ${url}`);
+    
+    // Use fetch and blob to trigger reliable download
+    fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.blob();
+        })
+        .then(blob => {
+            // Create a temporary link and trigger download
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = downloadUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            // Clean up
+            window.URL.revokeObjectURL(downloadUrl);
+            document.body.removeChild(a);
+            console.log(`Download initiated: ${filename}`);
+        })
+        .catch(error => {
+            console.error('Download failed:', error);
+            alert(`Failed to download ${format.toUpperCase()} report: ${error.message}`);
+        });
 } 
