@@ -1,5 +1,7 @@
 # PII Analyzer Docker Stack Deployment Guide
 
+**Version 2.0.0**
+
 This guide covers deploying the PII Analyzer Docker stack to a production server. The stack provides an always-on service with a web-based control panel for analyzing files for Personally Identifiable Information (PII).
 
 ## System Requirements

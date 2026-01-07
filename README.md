@@ -1,5 +1,7 @@
 # PII Analyzer
 
+**Version 2.0.0**
+
 A high-performance system for analyzing files for Personally Identifiable Information (PII) using Microsoft Presidio, with an always-on Docker-based deployment and web-based control panel.
 
 ## Features
