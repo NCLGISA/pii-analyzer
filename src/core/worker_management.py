@@ -55,9 +55,9 @@ MAX_LOAD_FACTOR = 1.5        # Maximum acceptable load average as a factor of CP
 CRITICAL_LOAD_FACTOR = 2.0   # Critical load threshold that triggers emergency measures
 
 # Worker timeout and monitoring
-WORKER_TIMEOUT_SECONDS = 120  # 2 minutes per file (reduced from 5 minutes)
+WORKER_TIMEOUT_SECONDS = 180  # 3 minutes per file (balance between timeout detection and allowing complex files)
 STALLED_WORKER_CHECK_INTERVAL = 30  # Check for stalled workers every 30 seconds
-MAX_CONSECUTIVE_ERRORS = 10  # Stop batch if too many consecutive errors
+MAX_CONSECUTIVE_ERRORS = 50  # Stop batch if too many consecutive errors (raised for timeout bursts)
 
 def get_thread_db(db_path: str) -> PIIDatabase:
     """
