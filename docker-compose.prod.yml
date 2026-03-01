@@ -126,8 +126,13 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Data directory (read-only for safety)
-      - /data:/data:ro
+      # Data directory (read-only, rslave propagation to expose NFS mounts into container)
+      - type: bind
+        source: /data
+        target: /data
+        read_only: true
+        bind:
+          propagation: rslave
       # Database persistence (read-write)
       - ./db:/app/db
       # Logs persistence
