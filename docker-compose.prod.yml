@@ -155,7 +155,7 @@ services:
       - OCR_THREADS=1
       - MAX_PAGES=0
       - PII_THRESHOLD=0.7
-      - PII_FILE_SIZE_LIMIT=100
+      - PII_FILE_SIZE_LIMIT=1024
       # OCR settings
       - OCR_DPI=300
       - OCR_THREADS=2
