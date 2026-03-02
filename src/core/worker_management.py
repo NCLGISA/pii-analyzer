@@ -58,7 +58,7 @@ CRITICAL_LOAD_FACTOR = 2.0   # Critical load threshold that triggers emergency m
 # Worker timeout and monitoring
 WORKER_TIMEOUT_SECONDS = 300  # 5 minutes per file to allow large scanned PDFs to complete OCR
 STALLED_WORKER_CHECK_INTERVAL = 30  # Check for stalled workers every 30 seconds
-MAX_CONSECUTIVE_ERRORS = 500  # Only stop if truly stuck - many datasets have clusters of unsupported files
+MAX_CONSECUTIVE_ERRORS = 5000  # High threshold for datasets with large clusters of unsupported files (e.g., phone extractions)
 
 def get_thread_db(db_path: str) -> PIIDatabase:
     """

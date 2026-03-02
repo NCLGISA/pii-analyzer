@@ -6,6 +6,7 @@ for resumable processing
 """
 
 import os
+import re
 import time
 import logging
 from typing import List, Tuple, Set, Dict, Any, Optional, Callable
@@ -26,6 +27,29 @@ DEFAULT_SUPPORTED_EXTENSIONS = {
     '.eml', '.msg',                           # Email files
     '.md', '.markdown'                        # Markdown
 }
+
+# Filename patterns to exclude -- mobile forensic extraction artifacts and
+# other XML/config files that never contain PII-relevant text content.
+# Patterns are matched case-insensitively against the filename (not the path).
+EXCLUDED_FILENAME_PATTERNS = [
+    re.compile(r'^smil\(?\d+\)?\.xml$', re.IGNORECASE),
+    re.compile(r'^strings_?\d+\.xml$', re.IGNORECASE),
+    re.compile(r'^~\$', re.IGNORECASE),                       # Office temp/lock files
+]
+
+EXCLUDED_FILENAME_PREFIXES = (
+    'autocomplet', 'gmsbackuptransport', 'stopwatch_state',
+)
+
+def _is_excluded_filename(filename: str) -> bool:
+    """Return True if the filename matches a known non-PII artifact pattern."""
+    lower = filename.lower()
+    if lower.startswith(EXCLUDED_FILENAME_PREFIXES):
+        return True
+    for pat in EXCLUDED_FILENAME_PATTERNS:
+        if pat.match(filename):
+            return True
+    return False
 
 def get_file_type(file_path: str) -> str:
     """
@@ -123,6 +147,10 @@ def scan_directory(
                 # Check if it's a supported file type
                 if not is_supported_file(file_path, extensions):
                     continue
+
+                # Skip known non-PII artifact filenames
+                if _is_excluded_filename(filename):
+                    continue
                 
                 # Add to found file set
                 found_files.add(file_path)
@@ -218,6 +246,9 @@ def scan_file_list(
             continue
             
         if not is_supported_file(file_path, supported_extensions):
+            continue
+
+        if _is_excluded_filename(os.path.basename(file_path)):
             continue
             
         total_files += 1
